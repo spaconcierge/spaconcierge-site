@@ -7,12 +7,12 @@
     window.dataLayer = window.dataLayer || [];
     function gtag(){ dataLayer.push(arguments); }
     gtag('js', new Date());
-    gtag('config', 'G-5Y0D6FR8Z2'); /* <-- paste your ID */
+    gtag('config', 'G-5Y0D6FR8Z2'); /* <-- replace with your GA4 ID */
   </script>
 
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#5ED5C3">
+
   <title>SpaConcierge — Never Miss a Client</title>
   <meta name="description" content="AI assistant for med-spas that instantly texts back missed calls, answers FAQs, and books appointments—without adding staff.">
   <link rel="canonical" href="https://www.getspaconcierge.com/">
@@ -29,12 +29,11 @@
   <meta name="twitter:description" content="AI assistant for med-spas that instantly texts back missed calls, answers FAQs, and books appointments—without adding staff.">
   <meta name="twitter:image" content="https://www.getspaconcierge.com/og-image-1200x630.png">
 
-  <!-- Favicons / PWA bits -->
+  <!-- Favicons -->
   <link rel="icon" href="/favicon.ico">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">
   <link rel="icon" type="image/png" href="/android-chrome-192x192.png" sizes="192x192">
   <link rel="icon" type="image/png" href="/android-chrome-512x512.png" sizes="512x512">
-  <link rel="manifest" href="/site.webmanifest">
 
   <!-- Perf hints -->
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
@@ -47,10 +46,6 @@
   <!-- Fonts -->
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 
-  <!-- Calendly popup widget (used for inline modal) -->
-  <link href="https://assets.calendly.com/assets/external/widget.css" rel="stylesheet">
-  <script src="https://assets.calendly.com/assets/external/widget.js" async></script>
-
   <style>
     :root{
       --aqua:#5ED5C3; --aqua-dark:#2aa697;
@@ -62,10 +57,6 @@
     body{font-family:'Inter',system-ui,Segoe UI,Roboto,Arial,sans-serif;color:var(--charcoal);line-height:1.6;background:#fff}
     a{color:inherit;text-decoration:none}
     .container{max-width:var(--max);margin:0 auto;padding:0 22px}
-
-    /* Skip link */
-    .skip{position:absolute;left:-9999px;top:-9999px}
-    .skip:focus{left:12px;top:12px;background:#fff;padding:8px 12px;border-radius:10px;z-index:100;box-shadow:var(--glow)}
 
     /* Header / Nav */
     header{position:sticky;top:0;z-index:50;backdrop-filter:saturate(140%) blur(10px);background:rgba(255,255,255,.82);border-bottom:1px solid var(--line);transition:box-shadow .25s ease}
@@ -101,25 +92,6 @@
     .card:hover{transform:translateY(-6px);box-shadow:var(--glow-strong);border-color:#d0f4eb}
     .card h3{margin-bottom:10px}
 
-    /* ROI Snapshot */
-    .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}
-    .stat{background:#ffffff;border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:var(--glow)}
-    .stat b{display:block;font-size:26px;font-family:'Montserrat',sans-serif}
-
-    /* CTA Banner */
-    .cta-banner{background:linear-gradient(135deg,#00c2a8,#009b85);color:#fff;border-radius:20px;padding:40px;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:20px}
-
-    /* Testimonials */
-    .testimonials{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
-    .testimonial{background:#f9fdfd;border:1px solid var(--line);border-radius:16px;padding:20px;font-size:15px;box-shadow:var(--glow)}
-    .testimonial strong{display:block;margin-top:10px}
-
-    /* FAQ */
-    .faq-item{margin-bottom:16px;border-bottom:1px solid var(--line)}
-    .faq-q{cursor:pointer;padding:14px;font-weight:600;display:flex;justify-content:space-between;align-items:center}
-    .faq-a{max-height:0;overflow:hidden;transition:max-height .4s ease,padding .4s ease;color:var(--muted);padding:0 14px}
-    .faq-item.active .faq-a{max-height:220px;padding:14px}
-
     /* Contact form */
     .contact{background:linear-gradient(180deg,#f7fffe,#ffffff)}
     form.contact-form{background:#fff;border:1px solid var(--line);border-radius:18px;padding:24px;box-shadow:var(--glow)}
@@ -136,12 +108,6 @@
     .form-error{display:none;background:#fff3f3;border:1px solid #ffd6d6;color:#7a1f1f;padding:12px 14px;border-radius:10px;margin:14px 0}
 
     footer{text-align:center;padding:40px 20px;color:var(--muted);border-top:1px solid var(--line)}
-
-    /* Sticky mobile CTA */
-    @media (max-width: 780px){
-      .sticky-cta{position:fixed;left:0;right:0;bottom:12px;z-index:60;display:flex;gap:10px;justify-content:center;padding:0 12px}
-      .sticky-cta .btn{padding:12px 16px}
-    }
 
     /* Reveal */
     .reveal{opacity:0;transform:translateY(20px);transition:opacity .6s ease, transform .6s ease}
@@ -160,51 +126,32 @@
     }
   </style>
 
-  <!-- JSON-LD: Organization (kept) -->
+  <!-- JSON-LD -->
   <script type="application/ld+json">
   {"@context":"https://schema.org","@type":"Organization","name":"SpaConcierge","url":"https://www.getspaconcierge.com","email":"matt@getspaconcierge.com","logo":"https://www.getspaconcierge.com/android-chrome-512x512.png","sameAs":[]}
   </script>
-  <!-- JSON-LD: WebSite with booking action -->
-  <script type="application/ld+json">
-  {
-    "@context":"https://schema.org",
-    "@type":"WebSite",
-    "url":"https://www.getspaconcierge.com",
-    "potentialAction":{
-      "@type":"ReserveAction",
-      "name":"Book a demo",
-      "target":"https://calendly.com/matt-getspaconcierge/new-meeting"
-    }
-  }
-  </script>
 </head>
 <body>
-<a href="#main" class="skip">Skip to content</a>
 
 <header id="site-header">
   <div class="container nav">
     <div class="brand"><span class="brand-badge" aria-hidden="true"></span>SpaConcierge</div>
     <div class="nav-cta">
       <a class="btn btn-secondary" href="mailto:matt@getspaconcierge.com" data-cta="email">Email Us</a>
-      <!-- Calendly popup (fallback to href if JS is off) -->
-      <a class="btn btn-primary cal-link"
-         href="https://calendly.com/matt-getspaconcierge/new-meeting"
-         data-cal="popup" data-cta="demo">Book a Demo</a>
+      <a class="btn btn-primary" href="https://calendly.com/matt-getspaconcierge/new-meeting" target="_blank" rel="noopener" data-cta="demo">Book a Demo</a>
     </div>
   </div>
 </header>
 
-<main id="main">
+<main>
   <!-- HERO -->
   <section class="hero">
     <div class="container grid2">
       <div class="reveal">
         <h1>Never Miss a Client. Turn Missed Calls into Booked Appointments.</h1>
-        <p>SpaConcierge instantly follows up on missed calls, texts, and DMs — securing appointments without adding extra staff.</p>
+        <p>SpaConcierge instantly follows up on missed calls, texts, and DMs — securing appointments 24/7, even after hours.</p>
         <div class="cta-row">
-          <a class="btn btn-primary cal-link"
-             href="https://calendly.com/matt-getspaconcierge/new-meeting"
-             data-cal="popup" data-cta="demo">Book a Free Demo</a>
+          <a class="btn btn-primary" href="https://calendly.com/matt-getspaconcierge/new-meeting" target="_blank" rel="noopener" data-cta="demo">Book a Free Demo</a>
           <a class="btn btn-secondary" href="mailto:matt@getspaconcierge.com" data-cta="email">Email Us</a>
         </div>
       </div>
@@ -225,42 +172,20 @@
     </div>
   </section>
 
-  <!-- ROI Snapshot (credibility) -->
-  <section>
-    <div class="container">
-      <div class="section-title">What we typically recover</div>
-      <p class="sub">Based on similar clinics; results vary by volume and services.</p>
-      <div class="stats">
-        <div class="stat reveal"><b>+10–25</b> extra bookings / month</div>
-        <div class="stat reveal"><b>&lt; 60s</b> first reply, even after hours</div>
-        <div class="stat reveal"><b>−30%</b> no-shows with reminders</div>
-      </div>
-    </div>
-  </section>
-
   <!-- BENEFITS -->
   <section>
     <div class="container">
       <div class="section-title">Why Spas Choose SpaConcierge</div>
       <p class="sub">Boost revenue and reduce front-desk workload.</p>
       <div class="cards">
-        <div class="card reveal"><h3>Immediate replies</h3><p>Responds in under a minute, even after hours.</p></div>
+        <div class="card reveal"><h3>Immediate replies</h3><p>&lt; 60s first reply — even nights & weekends.</p></div>
         <div class="card reveal"><h3>Real bookings</h3><p>Offer actual time slots pulled from your schedule.</p></div>
         <div class="card reveal"><h3>Med-spa fluent</h3><p>Understands injectables, facials, packages, and FAQs.</p></div>
       </div>
     </div>
   </section>
 
-  <!-- TESTIMONIALS -->
-  <section>
-    <div class="container">
-      <div class="section-title">What Clients Say</div>
-      <div class="testimonials">
-        <div class="testimonial reveal">“We recovered 15 missed appointments in the first week alone.” <strong>— MedSpa Owner</strong></div>
-        <div class="testimonial reveal">“Our front desk finally has breathing room. Clients love the fast replies.” <strong>— Clinic Manager</strong></div>
-      </div>
-    </div>
-  </section>
+  <!-- (Testimonials section removed as requested) -->
 
   <!-- FAQ -->
   <section>
@@ -272,7 +197,7 @@
       </div>
       <div class="faq-item reveal">
         <div class="faq-q" role="button" aria-expanded="false">Is this HIPAA compliant? <span aria-hidden="true">+</span></div>
-        <div class="faq-a" aria-hidden="true">We use HIPAA-aware workflows and secure storage practices. (We don’t claim certification.)</div>
+        <div class="faq-a" aria-hidden="true">We use HIPAA-aware workflows and secure storage practices. (We do not claim certification.)</div>
       </div>
       <div class="faq-item reveal">
         <div class="faq-q" role="button" aria-expanded="false">How fast can we start? <span aria-hidden="true">+</span></div>
@@ -292,7 +217,6 @@
         <input type="hidden" name="form-name" value="contact">
         <input type="hidden" name="page" value="https://www.getspaconcierge.com/">
 
-        <!-- Honeypot -->
         <div style="position:absolute;left:-5000px;opacity:0" aria-hidden="true">
           <label>Don’t fill this out if you're human:
             <input name="bot-field" tabindex="-1">
@@ -339,7 +263,6 @@
           <button class="btn btn-primary" type="submit" data-cta="contact-send">Send message</button>
         </div>
       </form>
-      <noscript><p class="sub" style="margin-top:10px">JavaScript is off. The form will still submit via Netlify.</p></noscript>
     </div>
   </section>
 
@@ -348,22 +271,12 @@
     <div class="container cta-banner reveal">
       <div><h2 style="margin:0">Ready to recover missed bookings?</h2></div>
       <div class="cta-row">
-        <a class="btn btn-primary cal-link"
-           href="https://calendly.com/matt-getspaconcierge/new-meeting"
-           data-cal="popup" data-cta="demo">Book a Demo Call</a>
+        <a class="btn btn-primary" href="https://calendly.com/matt-getspaconcierge/new-meeting" target="_blank" rel="noopener" data-cta="demo">Book a Demo Call</a>
         <a class="btn btn-secondary" href="mailto:matt@getspaconcierge.com" data-cta="email">Email Us</a>
       </div>
     </div>
   </section>
 </main>
-
-<!-- Sticky mobile CTA -->
-<div class="sticky-cta" aria-label="Quick actions">
-  <a class="btn btn-primary cal-link"
-     href="https://calendly.com/matt-getspaconcierge/new-meeting"
-     data-cal="popup" data-cta="sticky_demo">Book Demo</a>
-  <a class="btn btn-secondary" href="mailto:matt@getspaconcierge.com" data-cta="sticky_email">Email</a>
-</div>
 
 <footer>
   © <span id="y"></span> SpaConcierge — <a href="mailto:matt@getspaconcierge.com">matt@getspaconcierge.com</a>
@@ -404,52 +317,31 @@
     });
   })();
 
-  // GA4 CTA click tracking (covers all [data-cta])
+  // CTA click tracking
   function track(eventName, params){ try{ gtag('event', eventName, params||{}); }catch(e){} }
-  document.querySelectorAll('[data-cta]').forEach(el=>{
-    el.addEventListener('click', ()=>{
-      const id = el.dataset.cta || 'cta';
-      const label = el.textContent.trim();
-      track('select_content', {content_type:'cta', content_id:id, label});
-      if(id.includes('demo')) track('click_demo', {event_category:'CTA', event_label:label});
-      if(id.includes('email')) track('click_email', {event_category:'CTA', event_label:el.href});
-    });
+  document.querySelectorAll('a[data-cta="demo"]').forEach(a=>{
+    a.addEventListener('click', ()=> track('click_demo', {event_category:'CTA', event_label:a.textContent.trim()}));
+  });
+  document.querySelectorAll('a[data-cta="email"]').forEach(a=>{
+    a.addEventListener('click', ()=> track('click_email', {event_category:'CTA', event_label:a.href}));
   });
 
-  // Calendly inline popup: open modal & still keep href as fallback
-  function openCalendly(e){
-    const link = e.currentTarget;
-    if (!window.Calendly || link.dataset.cal !== 'popup') return; // fallback to href
-    e.preventDefault();
-    Calendly.initPopupWidget({ url: link.href });
-    track('calendly_popup_open', {event_category:'CTA', event_label: link.textContent.trim() });
-  }
-  document.querySelectorAll('.cal-link').forEach(a=>a.addEventListener('click', openCalendly));
-
-  // ---- Netlify Forms AJAX enhancement ----
+  // Netlify Forms AJAX enhancement
   (function(){
     const form = document.getElementById('contact-form');
     if(!form) return;
-
-    // capture current page URL
     form.querySelector('input[name="page"]').value = location.href;
 
-    function encodeForm(fd){
-      return new URLSearchParams(fd).toString();
-    }
+    function encodeForm(fd){ return new URLSearchParams(fd).toString(); }
 
     form.addEventListener('submit', function(e){
-      // If JS disabled, Netlify will still receive the POST
       e.preventDefault();
-
       const success = document.getElementById('contact-success');
       const error   = document.getElementById('contact-error');
-
       success.style.display = 'none';
       error.style.display   = 'none';
 
       const fd = new FormData(form);
-
       fetch('/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -461,9 +353,7 @@
         track('contact_submit', {event_category:'Form', event_label:'contact'});
         track('generate_lead', {event_category:'Form', event_label:'contact'});
       })
-      .catch(()=>{
-        error.style.display = 'block';
-      });
+      .catch(()=>{ error.style.display = 'block'; });
     });
   })();
 </script>
