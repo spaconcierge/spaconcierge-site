@@ -1,0 +1,79 @@
+<<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SpaConcierge — Never miss a booking again</title>
+  <meta name="description" content="SpaConcierge instantly texts back missed calls and turns them into confirmed appointments for med-spas." />
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root{
+      --aqua:#5ED5C3;
+      --aqua-700:#3FB9A8;
+      --charcoal:#2B2B2B;
+      --muted:#F4F6F6;
+      --white:#FFFFFF;
+      --shadow:0 10px 30px rgba(0,0,0,.07);
+      --radius:22px;
+      --max:1100px;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:'Inter',sans-serif;background:var(--white);color:#222;line-height:1.6}
+    .container{max-width:var(--max);margin:0 auto;padding:0 20px}
+    header{background:var(--white);border-bottom:1px solid #eee;position:sticky;top:0;z-index:100}
+    .nav{display:flex;justify-content:space-between;align-items:center;height:68px}
+    .brand{font-family:'Montserrat',sans-serif;font-weight:700;color:var(--charcoal)}
+    .btn{background:var(--aqua);color:white;padding:12px 18px;border:none;border-radius:999px;font-weight:600;box-shadow:var(--shadow);text-decoration:none}
+    .btn:hover{background:var(--aqua-700)}
+    .hero{padding:72px 0;display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:center}
+    .hero h1{font-family:'Montserrat',sans-serif;font-size:42px;margin:0 0 20px;color:var(--charcoal)}
+    .hero p{font-size:18px;color:#444}
+    .hero .cta-row{margin-top:20px}
+    .hero .cta-row .btn{margin-right:12px}
+    section{padding:72px 0;border-top:1px solid #f1f1f1}
+    .section-title{font-family:'Montserrat',sans-serif;font-size:28px;margin-bottom:20px;color:var(--charcoal)}
+    .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+    .card{background:white;border:1px solid #eee;border-radius:14px;padding:20px;box-shadow:var(--shadow)}
+    footer{padding:36px 0;color:#666;font-size:14px;text-align:center}
+  </style>
+</head>
+<body>
+<header>
+  <div class="container nav">
+    <div class="brand">SpaConcierge</div>
+    <a class="btn" href="mailto:matt@getspaconcierge.com">Contact Us</a>
+  </div>
+</header>
+
+<main>
+  <section class="hero container">
+    <div>
+      <h1>Never miss a booking again.</h1>
+      <p>SpaConcierge instantly texts back missed calls and converts them into confirmed appointments — without adding more staff.</p>
+      <div class="cta-row">
+        <a class="btn" href="https://calendly.com/your-link" target="_blank">Book a Free Demo</a>
+        <a class="btn" href="mailto:matt@getspaconcierge.com">Email Us</a>
+      </div>
+    </div>
+    <div>
+      <img src="https://dummyimage.com/400x600/e0f7f4/333&text=AI+Booking+Demo" alt="Demo Illustration" style="width:100%;border-radius:20px;box-shadow:var(--shadow)">
+    </div>
+  </section>
+
+  <section class="container">
+    <h2 class="section-title">Why spas choose SpaConcierge</h2>
+    <div class="grid-3">
+      <div class="card"><h3>Immediate replies</h3><p>Text back in under a minute — even after hours.</p></div>
+      <div class="card"><h3>Real bookings</h3><p>We offer actual time slots and send confirmations.</p></div>
+      <div class="card"><h3>Med-spa fluent</h3><p>Trained for common med-spa services like Botox & fillers.</p></div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  © <span id="y"></span> SpaConcierge — <a href="mailto:matt@getspaconcierge.com">matt@getspaconcierge.com</a>
+</footer>
+
+<script>document.getElementById("y").textContent = new Date().getFullYear();</script>
+</body>
+</html>
