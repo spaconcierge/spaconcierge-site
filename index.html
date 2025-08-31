@@ -7,7 +7,7 @@
     window.dataLayer = window.dataLayer || [];
     function gtag(){ dataLayer.push(arguments); }
     gtag('js', new Date());
-    gtag('config', 'G-5Y0D6FR8Z2'); /* <-- paste your ID */
+    gtag('config', 'G-5Y0D6FR8Z2');
   </script>
 
   <meta charset="utf-8" />
@@ -106,6 +106,15 @@
     .stat{background:#ffffff;border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:var(--glow)}
     .stat b{display:block;font-size:26px;font-family:'Montserrat',sans-serif}
 
+    /* FAQ (restored + polished) */
+    .faq-list{display:grid;gap:12px}
+    .faq-item{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff}
+    .faq-q{cursor:pointer;padding:16px 18px;font-weight:700;display:flex;justify-content:space-between;align-items:center}
+    .faq-q span{display:inline-block;transition:transform .25s ease;color:#94a3b8;font-weight:800}
+    .faq-a{max-height:0;overflow:hidden;transition:max-height .35s ease, padding .35s ease;color:var(--muted);padding:0 18px 0 18px}
+    .faq-item.active .faq-a{max-height:300px;padding:0 18px 16px 18px}
+    .faq-item.active .faq-q span{transform:rotate(45deg)} /* turns + into × */
+
     /* Contact form */
     .contact{background:linear-gradient(180deg,#f7fffe,#ffffff)}
     form.contact-form{background:#fff;border:1px solid var(--line);border-radius:18px;padding:24px;box-shadow:var(--glow)}
@@ -120,6 +129,15 @@
     .form-note{font-size:12px;color:var(--muted)}
     .form-success{display:none;background:#e8fcf7;border:1px solid #c9efe6;color:#0c3d36;padding:12px 14px;border-radius:10px;margin:14px 0}
     .form-error{display:none;background:#fff3f3;border:1px solid #ffd6d6;color:#7a1f1f;padding:12px 14px;border-radius:10px;margin:14px 0}
+
+    /* CTA Banner (centered) */
+    .cta-banner{
+      background:linear-gradient(135deg,#00c2a8,#009b85);
+      color:#fff;border-radius:20px;padding:40px;
+      display:flex;flex-direction:column;align-items:center;justify-content:center;
+      gap:18px;text-align:center
+    }
+    .cta-banner .cta-row{justify-content:center}
 
     footer{text-align:center;padding:40px 20px;color:var(--muted);border-top:1px solid var(--line)}
 
@@ -140,7 +158,7 @@
     }
   </style>
 
-  <!-- JSON-LD: Organization (kept) -->
+  <!-- JSON-LD: Organization -->
   <script type="application/ld+json">
   {"@context":"https://schema.org","@type":"Organization","name":"SpaConcierge","url":"https://www.getspaconcierge.com","email":"matt@getspaconcierge.com","logo":"https://www.getspaconcierge.com/android-chrome-512x512.png","sameAs":[]}
   </script>
@@ -166,7 +184,6 @@
     <div class="brand"><span class="brand-badge" aria-hidden="true"></span>SpaConcierge</div>
     <div class="nav-cta">
       <a class="btn btn-secondary" href="mailto:matt@getspaconcierge.com" data-cta="email">Email Us</a>
-      <!-- Calendly popup (fallback to href if JS is off) -->
       <a class="btn btn-primary cal-link"
          href="https://calendly.com/matt-getspaconcierge/new-meeting"
          data-cal="popup" data-cta="demo">Book a Demo</a>
@@ -205,7 +222,7 @@
     </div>
   </section>
 
-  <!-- ROI Snapshot (credibility) -->
+  <!-- ROI Snapshot -->
   <section>
     <div class="container">
       <div class="section-title">What we typically recover</div>
@@ -235,17 +252,31 @@
   <section>
     <div class="container">
       <div class="section-title">Frequently Asked Questions</div>
-    <div class="faq-item reveal">
-        <div class="faq-q" role="button" aria-expanded="false">Do we need to change our phone number? <span aria-hidden="true">+</span></div>
-        <div class="faq-a" aria-hidden="true">No — you keep your current number. We just add forwarding for missed calls.</div>
-      </div>
-      <div class="faq-item reveal">
-        <div class="faq-q" role="button" aria-expanded="false">Is this HIPAA compliant? <span aria-hidden="true">+</span></div>
-        <div class="faq-a" aria-hidden="true">We use HIPAA-aware workflows and secure storage practices. (We don’t claim certification.)</div>
-      </div>
-      <div class="faq-item reveal">
-        <div class="faq-q" role="button" aria-expanded="false">How fast can we start? <span aria-hidden="true">+</span></div>
-        <div class="faq-a" aria-hidden="true">Most spas are live within a day.</div>
+      <div class="faq-list">
+        <div class="faq-item reveal">
+          <div class="faq-q" role="button" aria-expanded="false">
+            Do we need to change our phone number? <span aria-hidden="true">+</span>
+          </div>
+          <div class="faq-a" aria-hidden="true">
+            No — you keep your current number. We just add forwarding for missed calls.
+          </div>
+        </div>
+        <div class="faq-item reveal">
+          <div class="faq-q" role="button" aria-expanded="false">
+            Is this HIPAA compliant? <span aria-hidden="true">+</span>
+          </div>
+          <div class="faq-a" aria-hidden="true">
+            We use HIPAA-aware workflows and secure storage practices. (We don’t claim certification.)
+          </div>
+        </div>
+        <div class="faq-item reveal">
+          <div class="faq-q" role="button" aria-expanded="false">
+            How fast can we start? <span aria-hidden="true">+</span>
+          </div>
+          <div class="faq-a" aria-hidden="true">
+            Most spas are live within a day.
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -312,10 +343,10 @@
     </div>
   </section>
 
-  <!-- CTA Banner -->
+  <!-- CTA Banner (centered) -->
   <section>
     <div class="container cta-banner reveal">
-      <div><h2 style="margin:0">Ready to recover missed bookings?</h2></div>
+      <h2 style="margin:0">Ready to recover missed bookings?</h2>
       <div class="cta-row">
         <a class="btn btn-primary cal-link"
            href="https://calendly.com/matt-getspaconcierge/new-meeting"
@@ -325,8 +356,6 @@
     </div>
   </section>
 </main>
-
-<!-- (sticky mobile CTA was removed, per your request) -->
 
 <footer>
   © <span id="y"></span> SpaConcierge — <a href="mailto:matt@getspaconcierge.com">matt@getspaconcierge.com</a>
@@ -344,7 +373,7 @@
   },{threshold:.1});
   revealEls.forEach(el=>io.observe(el));
 
-  // FAQ accordion
+  // FAQ accordion (kept)
   document.querySelectorAll('.faq-item').forEach(item=>{
     const q = item.querySelector('.faq-q');
     const a = item.querySelector('.faq-a');
