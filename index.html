@@ -1,79 +1,244 @@
-<<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SpaConcierge — Never miss a booking again</title>
-  <meta name="description" content="SpaConcierge instantly texts back missed calls and turns them into confirmed appointments for med-spas." />
-  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <style>
-    :root{
-      --aqua:#5ED5C3;
-      --aqua-700:#3FB9A8;
-      --charcoal:#2B2B2B;
-      --muted:#F4F6F6;
-      --white:#FFFFFF;
-      --shadow:0 10px 30px rgba(0,0,0,.07);
-      --radius:22px;
-      --max:1100px;
-    }
-    *{box-sizing:border-box}
-    body{margin:0;font-family:'Inter',sans-serif;background:var(--white);color:#222;line-height:1.6}
-    .container{max-width:var(--max);margin:0 auto;padding:0 20px}
-    header{background:var(--white);border-bottom:1px solid #eee;position:sticky;top:0;z-index:100}
-    .nav{display:flex;justify-content:space-between;align-items:center;height:68px}
-    .brand{font-family:'Montserrat',sans-serif;font-weight:700;color:var(--charcoal)}
-    .btn{background:var(--aqua);color:white;padding:12px 18px;border:none;border-radius:999px;font-weight:600;box-shadow:var(--shadow);text-decoration:none}
-    .btn:hover{background:var(--aqua-700)}
-    .hero{padding:72px 0;display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:center}
-    .hero h1{font-family:'Montserrat',sans-serif;font-size:42px;margin:0 0 20px;color:var(--charcoal)}
-    .hero p{font-size:18px;color:#444}
-    .hero .cta-row{margin-top:20px}
-    .hero .cta-row .btn{margin-right:12px}
-    section{padding:72px 0;border-top:1px solid #f1f1f1}
-    .section-title{font-family:'Montserrat',sans-serif;font-size:28px;margin-bottom:20px;color:var(--charcoal)}
-    .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
-    .card{background:white;border:1px solid #eee;border-radius:14px;padding:20px;box-shadow:var(--shadow)}
-    footer{padding:36px 0;color:#666;font-size:14px;text-align:center}
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SpaConcierge — Turn missed calls into booked appointments</title>
+<meta name="description" content="AI assistant for med-spas that instantly texts back missed calls, answers FAQs, and books appointments—without adding staff.">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#ffffff;
+    --ink:#1f252b;
+    --muted:#6a7682;
+    --line:#eef1f4;
+    --aqua:#5ED5C3;
+    --aqua-600:#3fb9a8;
+    --aqua-700:#2aa697;
+    --charcoal:#2B2B2B;
+    --glow:0 10px 30px rgba(0,0,0,.08);
+    --glow-strong:0 30px 80px rgba(0,0,0,.12);
+    --radius:18px;
+    --max:1100px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font-family:'Inter',system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+  a{color:inherit;text-decoration:none}
+  .container{max-width:var(--max);margin:0 auto;padding:0 22px}
+  /* Frosted / sticky nav */
+  header{
+    position:sticky;top:0;z-index:50;backdrop-filter:saturate(140%) blur(10px);
+    background:linear-gradient(180deg,rgba(255,255,255,.85),rgba(255,255,255,.6));
+    border-bottom:1px solid var(--line);
+  }
+  .nav{display:flex;align-items:center;justify-content:space-between;height:74px}
+  .brand{display:flex;align-items:center;gap:10px;font-family:'Montserrat',sans-serif;font-weight:700;font-size:20px}
+  .brand-badge{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,var(--aqua),#b8fff4)}
+  .nav-cta{display:flex;gap:10px}
+  .btn{
+    display:inline-flex;align-items:center;justify-content:center;gap:8px;
+    padding:12px 18px;border-radius:999px;border:1px solid transparent;
+    background:var(--aqua);color:#fff;font-weight:600;box-shadow:var(--glow);
+    transform:translateZ(0);transition:transform .18s ease, box-shadow .18s ease, background .18s ease;
+  }
+  .btn:hover{transform:translateY(-2px);box-shadow:var(--glow-strong);background:var(--aqua-600)}
+  .btn.secondary{background:transparent;color:var(--ink);border-color:#dde5ea}
+  .btn.secondary:hover{border-color:var(--aqua);box-shadow:0 8px 24px rgba(94,213,195,.25)}
+
+  /* Hero */
+  .hero{position:relative;padding:90px 0 40px}
+  .grid2{display:grid;grid-template-columns:1.1fr .9fr;gap:46px;align-items:center}
+  .hero h1{font-family:'Montserrat',sans-serif;font-size:42px;line-height:1.1;margin:0 0 16px}
+  .hero p{font-size:18px;color:var(--muted);margin:0 0 22px}
+  .cta-row{display:flex;gap:12px;flex-wrap:wrap}
+  .mock{
+    width:100%;height:520px;border-radius:24px;border:1px solid var(--line);background:linear-gradient(180deg,#e9fbf8,#d0f7f1);
+    box-shadow:var(--glow-strong);position:relative;overflow:hidden;transform:perspective(1000px) rotateX(0deg);
+    transition:transform .3s ease, box-shadow .3s ease;
+  }
+  .mock:hover{transform:perspective(1000px) rotateX(2deg) rotateY(-2deg);box-shadow:0 40px 120px rgba(0,0,0,.15)}
+  .blob{position:absolute;inset:auto auto -40% -10%;width:520px;height:520px;border-radius:50%;
+    background:radial-gradient(closest-side, rgba(94,213,195,.35), transparent 70%);filter:blur(30px);pointer-events:none}
+  .badge-row{display:flex;gap:14px;flex-wrap:wrap;margin-top:20px}
+  .pill{font-size:12px;color:#0c3d36;background:#e9fbf8;border:1px solid #c7efe8;padding:8px 12px;border-radius:999px}
+
+  /* Sections */
+  section{padding:70px 0;border-top:1px solid var(--line)}
+  .section-title{font-family:'Montserrat',sans-serif;font-size:28px;margin:0 0 10px}
+  .sub{color:var(--muted);margin:0 0 30px}
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  .card{
+    background:#fff;border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:var(--glow);
+    transition:transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+  }
+  .card:hover{transform:translateY(-6px);box-shadow:var(--glow-strong);border-color:#d7efe9}
+  .card h3{margin:0 0 8px;font-size:18px}
+  .card p{margin:0;color:var(--muted)}
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  .step{background:#fcfdfd;border:1px dashed #e8f4f1;border-radius:16px;padding:22px}
+  .step strong{display:block;margin-bottom:8px}
+  .logos{display:flex;gap:24px;flex-wrap:wrap;align-items:center;opacity:.9}
+  .logo{height:26px;width:120px;border-radius:8px;background:linear-gradient(180deg,#f4f7f8,#edf3f5);border:1px solid var(--line)}
+  .cta-banner{
+    background:linear-gradient(135deg,#e9fbf8,#f7fffe);border:1px solid #d5f3ec;border-radius:20px;
+    padding:28px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:14px;box-shadow:var(--glow)
+  }
+
+  /* Reveal */
+  .reveal{opacity:0;transform:translateY(18px);transition:opacity .6s ease, transform .6s ease}
+  .reveal.show{opacity:1;transform:translateY(0)}
+
+  footer{padding:40px 0;color:#77838f;text-align:center}
+  footer a{color:#2c7e74}
+  hr.line{border:none;border-top:1px solid var(--line);margin:34px 0}
+
+  /* Responsive */
+  @media (max-width:990px){
+    .grid2{grid-template-columns:1fr}
+    .hero{padding-top:70px}
+    .cards,.steps{grid-template-columns:1fr}
+  }
+</style>
 </head>
 <body>
+
 <header>
   <div class="container nav">
-    <div class="brand">SpaConcierge</div>
-    <a class="btn" href="mailto:matt@getspaconcierge.com">Contact Us</a>
+    <div class="brand">
+      <span class="brand-badge"></span> SpaConcierge
+    </div>
+    <div class="nav-cta">
+      <a class="btn secondary" href="mailto:matt@getspaconcierge.com">Contact</a>
+      <a class="btn" href="https://calendly.com/your-link" target="_blank" rel="noopener">Book a Demo</a>
+    </div>
   </div>
 </header>
 
 <main>
-  <section class="hero container">
-    <div>
-      <h1>Never miss a booking again.</h1>
-      <p>SpaConcierge instantly texts back missed calls and converts them into confirmed appointments — without adding more staff.</p>
-      <div class="cta-row">
-        <a class="btn" href="https://calendly.com/your-link" target="_blank">Book a Free Demo</a>
-        <a class="btn" href="mailto:matt@getspaconcierge.com">Email Us</a>
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="container grid2">
+      <div class="reveal">
+        <h1>Turn missed calls into booked appointments.</h1>
+        <p>
+          SpaConcierge instantly texts back callers, answers common questions, and offers real time slots.
+          No extra front-desk hours. No voicemail ping-pong. More revenue from the clients you already have.
+        </p>
+        <div class="cta-row">
+          <a class="btn" href="https://calendly.com/your-link" target="_blank" rel="noopener">Book a Free Demo</a>
+          <a class="btn secondary" href="mailto:matt@getspaconcierge.com">Email Us</a>
+        </div>
+        <div class="badge-row">
+          <span class="pill">Works with call forwarding</span>
+          <span class="pill">Text & WhatsApp follow-ups</span>
+          <span class="pill">HIPAA-aware workflows</span>
+        </div>
       </div>
-    </div>
-    <div>
-      <img src="https://dummyimage.com/400x600/e0f7f4/333&text=AI+Booking+Demo" alt="Demo Illustration" style="width:100%;border-radius:20px;box-shadow:var(--shadow)">
+      <div class="reveal">
+        <div class="mock">
+          <div class="blob"></div>
+          <!-- you can replace this with a real screenshot later -->
+        </div>
+      </div>
     </div>
   </section>
 
-  <section class="container">
-    <h2 class="section-title">Why spas choose SpaConcierge</h2>
-    <div class="grid-3">
-      <div class="card"><h3>Immediate replies</h3><p>Text back in under a minute — even after hours.</p></div>
-      <div class="card"><h3>Real bookings</h3><p>We offer actual time slots and send confirmations.</p></div>
-      <div class="card"><h3>Med-spa fluent</h3><p>Trained for common med-spa services like Botox & fillers.</p></div>
+  <!-- SOCIAL PROOF -->
+  <section>
+    <div class="container reveal">
+      <div class="section-title">Trusted med-spa style experience</div>
+      <p class="sub">Designed for Botox, fillers, facials, laser—clear, friendly, and on-brand.</p>
+      <div class="logos">
+        <div class="logo" title="Your logo here"></div>
+        <div class="logo"></div>
+        <div class="logo"></div>
+        <div class="logo"></div>
+      </div>
     </div>
   </section>
+
+  <!-- HOW IT WORKS -->
+  <section>
+    <div class="container">
+      <div class="section-title">How it works</div>
+      <p class="sub">Up and running in under an hour—keep your current phone number.</p>
+      <div class="steps">
+        <div class="step reveal"><strong>1) Forward missed calls</strong> We add a virtual line that catches **no-answer** calls and routes them to text.</div>
+        <div class="step reveal"><strong>2) Smart replies</strong> We reply within seconds with branded messages, answers, pricing ranges, and pre-qualifying questions.</div>
+        <div class="step reveal"><strong>3) Book & confirm</strong> We offer real time slots, place holds, and send confirmations + reminders to cut no-shows.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- BENEFITS -->
+  <section>
+    <div class="container">
+      <div class="section-title">Why spas choose SpaConcierge</div>
+      <p class="sub">Recover revenue, reduce front-desk load, and deliver a VIP client experience.</p>
+      <div class="cards">
+        <div class="card reveal">
+          <h3>Immediate replies</h3>
+          <p>Under 60 seconds—even after hours. No more voicemail gaps.</p>
+        </div>
+        <div class="card reveal">
+          <h3>Real bookings</h3>
+          <p>Offer actual openings pulled from your calendar (or a curated schedule).</p>
+        </div>
+        <div class="card reveal">
+          <h3>Med-spa fluent</h3>
+          <p>Understands injectables, facials, packages, and common pre-/post-care FAQs.</p>
+        </div>
+        <div class="card reveal">
+          <h3>No extra hires</h3>
+          <p>Automate first response + triage so your team focuses on in-clinic guests.</p>
+        </div>
+        <div class="card reveal">
+          <h3>Brand-safe</h3>
+          <p>Use your voice & policies. We keep transcripts and opt-in compliant messaging.</p>
+        </div>
+        <div class="card reveal">
+          <h3>Simple setup</h3>
+          <p>Keep your number; just add forwarding rules. Start with one service, expand fast.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section>
+    <div class="container cta-banner reveal">
+      <div>
+        <div class="section-title" style="margin:0">Ready to stop losing booked revenue?</div>
+        <p class="sub" style="margin:6px 0 0">We’ll show your live recovery rate in the first week.</p>
+      </div>
+      <div class="cta-row">
+        <a class="btn" href="https://calendly.com/your-link" target="_blank" rel="noopener">Get a live demo</a>
+        <a class="btn secondary" href="mailto:matt@getspaconcierge.com">Talk to us</a>
+      </div>
+    </div>
+  </section>
+
+  <hr class="line">
 </main>
 
 <footer>
-  © <span id="y"></span> SpaConcierge — <a href="mailto:matt@getspaconcierge.com">matt@getspaconcierge.com</a>
+  © <span id="y"></span> SpaConcierge —
+  <a href="mailto:matt@getspaconcierge.com">matt@getspaconcierge.com</a>
 </footer>
 
-<script>document.getElementById("y").textContent = new Date().getFullYear();</script>
+<script>
+  // On-scroll reveal
+  const revealEls = document.querySelectorAll('.reveal');
+  const io = new IntersectionObserver((entries)=>{
+    entries.forEach(e=>{
+      if(e.isIntersecting){ e.target.classList.add('show'); io.unobserve(e.target); }
+    })
+  },{threshold:.12});
+  revealEls.forEach(el=>io.observe(el));
+
+  // Year
+  document.getElementById('y').textContent = new Date().getFullYear();
+</script>
 </body>
 </html>
