@@ -106,20 +106,6 @@
     .stat{background:#ffffff;border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:var(--glow)}
     .stat b{display:block;font-size:26px;font-family:'Montserrat',sans-serif}
 
-    /* CTA Banner */
-    .cta-banner{background:linear-gradient(135deg,#00c2a8,#009b85);color:#fff;border-radius:20px;padding:40px;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:20px}
-
-    /* Testimonials */
-    .testimonials{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
-    .testimonial{background:#f9fdfd;border:1px solid var(--line);border-radius:16px;padding:20px;font-size:15px;box-shadow:var(--glow)}
-    .testimonial strong{display:block;margin-top:10px}
-
-    /* FAQ */
-    .faq-item{margin-bottom:16px;border-bottom:1px solid var(--line)}
-    .faq-q{cursor:pointer;padding:14px;font-weight:600;display:flex;justify-content:space-between;align-items:center}
-    .faq-a{max-height:0;overflow:hidden;transition:max-height .4s ease,padding .4s ease;color:var(--muted);padding:0 14px}
-    .faq-item.active .faq-a{max-height:220px;padding:14px}
-
     /* Contact form */
     .contact{background:linear-gradient(180deg,#f7fffe,#ffffff)}
     form.contact-form{background:#fff;border:1px solid var(--line);border-radius:18px;padding:24px;box-shadow:var(--glow)}
@@ -136,12 +122,6 @@
     .form-error{display:none;background:#fff3f3;border:1px solid #ffd6d6;color:#7a1f1f;padding:12px 14px;border-radius:10px;margin:14px 0}
 
     footer{text-align:center;padding:40px 20px;color:var(--muted);border-top:1px solid var(--line)}
-
-    /* Sticky mobile CTA */
-    @media (max-width: 780px){
-      .sticky-cta{position:fixed;left:0;right:0;bottom:12px;z-index:60;display:flex;gap:10px;justify-content:center;padding:0 12px}
-      .sticky-cta .btn{padding:12px 16px}
-    }
 
     /* Reveal */
     .reveal{opacity:0;transform:translateY(20px);transition:opacity .6s ease, transform .6s ease}
@@ -251,22 +231,11 @@
     </div>
   </section>
 
-  <!-- TESTIMONIALS -->
-  <section>
-    <div class="container">
-      <div class="section-title">What Clients Say</div>
-      <div class="testimonials">
-        <div class="testimonial reveal">“We recovered 15 missed appointments in the first week alone.” <strong>— MedSpa Owner</strong></div>
-        <div class="testimonial reveal">“Our front desk finally has breathing room. Clients love the fast replies.” <strong>— Clinic Manager</strong></div>
-      </div>
-    </div>
-  </section>
-
   <!-- FAQ -->
   <section>
     <div class="container">
       <div class="section-title">Frequently Asked Questions</div>
-      <div class="faq-item reveal">
+    <div class="faq-item reveal">
         <div class="faq-q" role="button" aria-expanded="false">Do we need to change our phone number? <span aria-hidden="true">+</span></div>
         <div class="faq-a" aria-hidden="true">No — you keep your current number. We just add forwarding for missed calls.</div>
       </div>
@@ -357,13 +326,7 @@
   </section>
 </main>
 
-<!-- Sticky mobile CTA -->
-<div class="sticky-cta" aria-label="Quick actions">
-  <a class="btn btn-primary cal-link"
-     href="https://calendly.com/matt-getspaconcierge/new-meeting"
-     data-cal="popup" data-cta="sticky_demo">Book Demo</a>
-  <a class="btn btn-secondary" href="mailto:matt@getspaconcierge.com" data-cta="sticky_email">Email</a>
-</div>
+<!-- (sticky mobile CTA was removed, per your request) -->
 
 <footer>
   © <span id="y"></span> SpaConcierge — <a href="mailto:matt@getspaconcierge.com">matt@getspaconcierge.com</a>
@@ -426,30 +389,22 @@
   }
   document.querySelectorAll('.cal-link').forEach(a=>a.addEventListener('click', openCalendly));
 
-  // ---- Netlify Forms AJAX enhancement ----
+  // Netlify Forms AJAX enhancement
   (function(){
     const form = document.getElementById('contact-form');
     if(!form) return;
-
-    // capture current page URL
     form.querySelector('input[name="page"]').value = location.href;
 
-    function encodeForm(fd){
-      return new URLSearchParams(fd).toString();
-    }
+    function encodeForm(fd){ return new URLSearchParams(fd).toString(); }
 
     form.addEventListener('submit', function(e){
-      // If JS disabled, Netlify will still receive the POST
-      e.preventDefault();
-
+      e.preventDefault(); // fallback still works without JS
       const success = document.getElementById('contact-success');
       const error   = document.getElementById('contact-error');
-
       success.style.display = 'none';
       error.style.display   = 'none';
 
       const fd = new FormData(form);
-
       fetch('/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -461,9 +416,7 @@
         track('contact_submit', {event_category:'Form', event_label:'contact'});
         track('generate_lead', {event_category:'Form', event_label:'contact'});
       })
-      .catch(()=>{
-        error.style.display = 'block';
-      });
+      .catch(()=>{ error.style.display = 'block'; });
     });
   })();
 </script>
