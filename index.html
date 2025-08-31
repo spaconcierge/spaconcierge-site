@@ -10,7 +10,7 @@
     gtag('config', 'G-5Y0D6FR8Z2'); /* <-- paste your ID */
   </script>
 
-  <meta charset="utf-8" />
+ <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>SpaConcierge — Never Miss a Client</title>
@@ -29,13 +29,13 @@
   <meta name="twitter:description" content="AI assistant for med-spas that instantly texts back missed calls, answers FAQs, and books appointments—without adding staff.">
   <meta name="twitter:image" content="https://www.getspaconcierge.com/og-image-1200x630.png">
 
-  <!-- Favicons (add these files when ready) -->
+  <!-- Favicons -->
   <link rel="icon" href="/favicon.ico">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">
   <link rel="icon" type="image/png" href="/android-chrome-192x192.png" sizes="192x192">
   <link rel="icon" type="image/png" href="/android-chrome-512x512.png" sizes="512x512">
 
-  <!-- Performance: preconnect/dns-prefetch -->
+  <!-- Perf hints -->
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="dns-prefetch" href="//fonts.googleapis.com">
@@ -48,13 +48,9 @@
 
   <style>
     :root{
-      --aqua:#5ED5C3;
-      --aqua-dark:#2aa697;
-      --charcoal:#1f252b;
-      --muted:#6a7682;
-      --line:#eef1f4;
-      --glow:0 10px 30px rgba(0,0,0,.08);
-      --glow-strong:0 30px 80px rgba(0,0,0,.15);
+      --aqua:#5ED5C3; --aqua-dark:#2aa697;
+      --charcoal:#1f252b; --muted:#6a7682; --line:#eef1f4;
+      --glow:0 10px 30px rgba(0,0,0,.08); --glow-strong:0 30px 80px rgba(0,0,0,.15);
       --max:1100px;
     }
     *{box-sizing:border-box;margin:0;padding:0}
@@ -63,13 +59,7 @@
     .container{max-width:var(--max);margin:0 auto;padding:0 22px}
 
     /* Header / Nav */
-    header{
-      position:sticky;top:0;z-index:50;
-      backdrop-filter:saturate(140%) blur(10px);
-      background:rgba(255,255,255,.82);
-      border-bottom:1px solid var(--line);
-      transition:box-shadow .25s ease;
-    }
+    header{position:sticky;top:0;z-index:50;backdrop-filter:saturate(140%) blur(10px);background:rgba(255,255,255,.82);border-bottom:1px solid var(--line);transition:box-shadow .25s ease}
     header.scrolled{box-shadow:0 2px 20px rgba(0,0,0,.06)}
     .nav{display:flex;justify-content:space-between;align-items:center;height:74px}
     .brand{font-family:'Montserrat',sans-serif;font-weight:700;font-size:20px;display:flex;align-items:center;gap:8px}
@@ -90,11 +80,7 @@
     .hero h1{font-family:'Montserrat',sans-serif;font-size:46px;line-height:1.1;margin-bottom:20px}
     .hero p{font-size:18px;color:var(--muted);margin-bottom:20px}
     .cta-row{display:flex;gap:12px;flex-wrap:wrap}
-    .mock{
-      width:100%;height:500px;border-radius:20px;background:linear-gradient(135deg,#d9f9f1,#ffffff);
-      border:1px solid var(--line);box-shadow:var(--glow);
-      transition:transform .4s ease, box-shadow .4s ease;
-    }
+    .mock{width:100%;height:500px;border-radius:20px;background:linear-gradient(135deg,#d9f9f1,#ffffff);border:1px solid var(--line);box-shadow:var(--glow);transition:transform .4s ease, box-shadow .4s ease}
     .mock:hover{transform:perspective(1000px) rotateX(2deg) rotateY(-2deg);box-shadow:var(--glow-strong)}
 
     /* Sections */
@@ -107,11 +93,7 @@
     .card h3{margin-bottom:10px}
 
     /* CTA Banner */
-    .cta-banner{
-      background:linear-gradient(135deg,#00c2a8,#009b85);
-      color:#fff;border-radius:20px;padding:40px;
-      display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:20px
-    }
+    .cta-banner{background:linear-gradient(135deg,#00c2a8,#009b85);color:#fff;border-radius:20px;padding:40px;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:20px}
 
     /* Testimonials */
     .testimonials{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
@@ -124,42 +106,50 @@
     .faq-a{max-height:0;overflow:hidden;transition:max-height .4s ease,padding .4s ease;color:var(--muted);padding:0 14px}
     .faq-item.active .faq-a{max-height:220px;padding:14px}
 
+    /* Contact form */
+    .contact{background:linear-gradient(180deg,#f7fffe,#ffffff)}
+    form.contact-form{background:#fff;border:1px solid var(--line);border-radius:18px;padding:24px;box-shadow:var(--glow)}
+    .fields{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+    .field{display:flex;flex-direction:column;gap:6px}
+    .field.full{grid-column:1/-1}
+    label{font-weight:600;font-size:14px}
+    input,textarea,select{appearance:none;border:1px solid #e3e8ee;border-radius:10px;padding:12px 14px;font-size:15px;transition:border-color .2s ease, box-shadow .2s ease}
+    textarea{min-height:120px;resize:vertical}
+    input:focus,textarea:focus,select:focus{outline:none;border-color:var(--aqua);box-shadow:0 0 0 3px rgba(94,213,195,.18)}
+    .form-foot{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-top:12px;flex-wrap:wrap}
+    .form-note{font-size:12px;color:var(--muted)}
+    .form-success{display:none;background:#e8fcf7;border:1px solid #c9efe6;color:#0c3d36;padding:12px 14px;border-radius:10px;margin:14px 0}
+    .form-error{display:none;background:#fff3f3;border:1px solid #ffd6d6;color:#7a1f1f;padding:12px 14px;border-radius:10px;margin:14px 0}
+
     footer{text-align:center;padding:40px 20px;color:var(--muted);border-top:1px solid var(--line)}
 
-    /* Reveal animations */
+    /* Reveal */
     .reveal{opacity:0;transform:translateY(20px);transition:opacity .6s ease, transform .6s ease}
     .reveal.show{opacity:1;transform:translateY(0)}
 
-    /* Respect reduced motion */
+    /* Reduced motion */
     @media (prefers-reduced-motion: reduce){
-      .mock,.btn,.card,.reveal{transition:none !important}
+      .mock,.btn,.card,.reveal,input,textarea,select{transition:none !important}
       .mock:hover,.btn:hover,.card:hover{transform:none !important}
     }
 
     @media(max-width:900px){
       .grid2{grid-template-columns:1fr}
       .hero{text-align:center}
+      .fields{grid-template-columns:1fr}
     }
   </style>
 
-  <!-- JSON-LD (Organization) -->
+  <!-- JSON-LD -->
   <script type="application/ld+json">
-  {
-    "@context":"https://schema.org",
-    "@type":"Organization",
-    "name":"SpaConcierge",
-    "url":"https://www.getspaconcierge.com",
-    "email":"matt@getspaconcierge.com",
-    "logo":"https://www.getspaconcierge.com/android-chrome-512x512.png",
-    "sameAs":[]
-  }
+  {"@context":"https://schema.org","@type":"Organization","name":"SpaConcierge","url":"https://www.getspaconcierge.com","email":"matt@getspaconcierge.com","logo":"https://www.getspaconcierge.com/android-chrome-512x512.png","sameAs":[]}
   </script>
 </head>
 <body>
 
 <header id="site-header">
   <div class="container nav">
-    <div class="brand" aria-label="SpaConcierge home"><span class="brand-badge" aria-hidden="true"></span>SpaConcierge</div>
+    <div class="brand"><span class="brand-badge" aria-hidden="true"></span>SpaConcierge</div>
     <div class="nav-cta">
       <a class="btn btn-secondary" href="mailto:matt@getspaconcierge.com" data-cta="email">Email Us</a>
       <a class="btn btn-primary" href="https://calendly.com/matt-getspaconcierge/new-meeting" target="_blank" rel="noopener" data-cta="demo">Book a Demo</a>
@@ -239,6 +229,69 @@
     </div>
   </section>
 
+  <!-- CONTACT -->
+  <section id="contact" class="contact">
+    <div class="container">
+      <div class="section-title">Contact us</div>
+      <p class="sub">Prefer email over scheduling? Send a quick note—we’ll reply within a business day.</p>
+
+      <!-- Netlify Forms: stores submissions in Netlify dashboard -->
+      <form class="contact-form reveal" name="contact" method="POST" data-netlify="true" netlify-honeypot="bot-field" action="#contact-thanks" id="contact-form">
+        <!-- Netlify form-name (required) -->
+        <input type="hidden" name="form-name" value="contact">
+        <!-- Captures current page -->
+        <input type="hidden" name="page" value="https://www.getspaconcierge.com/">
+
+        <!-- Honeypot (spam trap) -->
+        <div style="position:absolute;left:-5000px;opacity:0" aria-hidden="true">
+          <label>Don’t fill this out if you're human:
+            <input name="bot-field" tabindex="-1">
+          </label>
+        </div>
+
+        <div class="form-success" id="contact-success" role="status" aria-live="polite">Thanks! We’ll get back to you shortly.</div>
+        <div class="form-error" id="contact-error" role="alert">Oops—something went wrong. Please email <a href="mailto:matt@getspaconcierge.com">matt@getspaconcierge.com</a>.</div>
+
+        <div class="fields">
+          <div class="field">
+            <label for="name">Your name*</label>
+            <input id="name" name="name" autocomplete="name" required>
+          </div>
+          <div class="field">
+            <label for="email">Email*</label>
+            <input id="email" name="email" type="email" autocomplete="email" required>
+          </div>
+          <div class="field">
+            <label for="phone">Phone</label>
+            <input id="phone" name="phone" inputmode="tel" placeholder="+1 (___) ___-____">
+          </div>
+          <div class="field">
+            <label for="business">Business / Clinic</label>
+            <input id="business" name="business" autocomplete="organization">
+          </div>
+          <div class="field">
+            <label for="interest">I'm interested in</label>
+            <select id="interest" name="interest">
+              <option>Trial / pilot</option>
+              <option>Full setup</option>
+              <option>Pricing questions</option>
+              <option>Partnership</option>
+            </select>
+          </div>
+          <div class="field full">
+            <label for="message">How can we help?</label>
+            <textarea id="message" name="message" placeholder="Tell us about missed calls, after-hours coverage, or goals..."></textarea>
+          </div>
+        </div>
+
+        <div class="form-foot">
+          <span class="form-note">By submitting, you agree to be contacted about SpaConcierge. No spam—ever.</span>
+          <button class="btn btn-primary" type="submit" data-cta="contact-send">Send message</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
   <!-- CTA Banner -->
   <section>
     <div class="container cta-banner reveal">
@@ -256,25 +309,18 @@
 </footer>
 
 <script>
-  // Sticky header shadow on scroll
+  // Sticky header shadow
   const hdr = document.getElementById('site-header');
-  addEventListener('scroll', () => {
-    hdr.classList.toggle('scrolled', window.scrollY > 6);
-  });
+  addEventListener('scroll', () => hdr.classList.toggle('scrolled', scrollY > 6));
 
   // Reveal on scroll
   const revealEls = document.querySelectorAll('.reveal');
   const io = new IntersectionObserver((entries)=>{
-    entries.forEach(e=>{
-      if(e.isIntersecting){
-        e.target.classList.add('show');
-        io.unobserve(e.target);
-      }
-    })
+    entries.forEach(e=>{ if(e.isIntersecting){ e.target.classList.add('show'); io.unobserve(e.target); } })
   },{threshold:.1});
   revealEls.forEach(el=>io.observe(el));
 
-  // FAQ accordion (accessible-ish)
+  // FAQ accordion
   document.querySelectorAll('.faq-item').forEach(item=>{
     const q = item.querySelector('.faq-q');
     const a = item.querySelector('.faq-a');
@@ -285,36 +331,67 @@
     });
   });
 
-  // Dynamic year
+  // Year
   document.getElementById('y').textContent = new Date().getFullYear();
 
-  // --- Analytics helpers ---
-
-  // 1) UTM passthrough to Calendly links (preserve ?utm_source=…)
+  // UTM passthrough to Calendly
   (function(){
     const utm = location.search;
     if(!utm) return;
     document.querySelectorAll('a[href*="calendly.com/matt-getspaconcierge"]').forEach(a=>{
-      try{
-        const u = new URL(a.href);
-        u.search += (u.search ? '&' : '') + utm.slice(1);
-        a.href = u.toString();
-      }catch(e){}
+      try{ const u = new URL(a.href); u.search += (u.search ? '&' : '') + utm.slice(1); a.href = u.toString(); }catch(e){}
     });
   })();
 
-  // 2) CTA click tracking (Calendly + Email)
-  function track(eventName, params){
-    if (typeof gtag === 'function') {
-      gtag('event', eventName, params || {});
-    }
-  }
+  // CTA click tracking
+  function track(eventName, params){ try{ gtag('event', eventName, params||{}); }catch(e){} }
   document.querySelectorAll('a[data-cta="demo"]').forEach(a=>{
     a.addEventListener('click', ()=> track('click_demo', {event_category:'CTA', event_label:a.textContent.trim()}));
   });
   document.querySelectorAll('a[data-cta="email"]').forEach(a=>{
     a.addEventListener('click', ()=> track('click_email', {event_category:'CTA', event_label:a.href}));
   });
+
+  // ---- Netlify Forms AJAX enhancement ----
+  (function(){
+    const form = document.getElementById('contact-form');
+    if(!form) return;
+
+    // capture current page URL
+    form.querySelector('input[name="page"]').value = location.href;
+
+    function encodeForm(fd){
+      return new URLSearchParams(fd).toString();
+    }
+
+    form.addEventListener('submit', function(e){
+      // If JS disabled, Netlify will still receive the POST (thanks to action + data-netlify)
+      e.preventDefault();
+
+      const success = document.getElementById('contact-success');
+      const error   = document.getElementById('contact-error');
+
+      success.style.display = 'none';
+      error.style.display   = 'none';
+
+      const fd = new FormData(form);
+
+      fetch('/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: encodeForm(fd)
+      })
+      .then(()=>{
+        form.reset();
+        success.style.display = 'block';
+        track('contact_submit', {event_category:'Form', event_label:'contact'});
+        track('generate_lead', {event_category:'Form', event_label:'contact'});
+      })
+      .catch(()=>{
+        error.style.display = 'block';
+      });
+    });
+  })();
 </script>
 </body>
 </html>
