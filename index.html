@@ -109,9 +109,12 @@
     }
     @keyframes float{ 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
 
-    /* --- HERO ANIMATION (chat/booking preview) --- */
+    /* --- HERO ANIMATION (multi-scene, staggered) --- */
     .hero-anim{position:absolute; inset:0; display:grid; place-items:center; pointer-events:none}
-    .hero-bubbles{width:min(520px,70%); display:grid; gap:12px;}
+    .scene{position:absolute; inset:0; display:grid; place-items:center; opacity:0; transition:opacity .4s ease}
+    .scene.active{opacity:1}
+
+    .hero-bubbles{width:min(520px,70%); display:grid; gap:12px}
 
     /* message cards */
     .bubble{
@@ -119,7 +122,8 @@
       padding:12px 14px; box-shadow:var(--glow);
       display:flex; align-items:center; gap:10px;
       opacity:0; transform:translateY(12px);
-      animation:bubbleIn 8s linear infinite;
+      /* paused by default; we toggle to play via JS when a scene activates */
+      animation: bubbleIn 6.8s linear both paused;
       font-size:15px;
     }
     .bubble strong{font-weight:700}
@@ -146,17 +150,17 @@
     .typing i:nth-child(2){animation-delay:.15s}
     .typing i:nth-child(3){animation-delay:.3s}
 
-    /* timeline loop (each bubble has its own delay) */
-    .b1{animation-delay:.0s}
-    .b2{animation-delay:1.2s}
-    .b3{animation-delay:2.8s}
+    /* per-bubble timing inside each scene */
+    .b1{animation-delay:.2s}
+    .b2{animation-delay:1.4s}
+    .b3{animation-delay:2.4s}
+    .b4{animation-delay:3.8s}
 
     /* keyframes */
     @keyframes bubbleIn{
       0%   {opacity:0; transform:translateY(12px)}
       8%   {opacity:1; transform:translateY(0)}
-      28%  {opacity:1; transform:translateY(0)}
-      38%  {opacity:0; transform:translateY(-6px)}
+      75%  {opacity:1; transform:translateY(0)}
       100% {opacity:0; transform:translateY(-6px)}
     }
     @keyframes blink{
@@ -282,29 +286,75 @@
         </div>
       </div>
 
-      <!-- Hero card with chat animation preview -->
+      <!-- Hero card with multi-scene chat animation -->
       <div class="mock reveal" role="img" aria-label="SpaConcierge responding and booking preview">
         <div class="hero-anim" aria-hidden="true">
-          <div class="hero-bubbles">
-            <div class="bubble b1">
-              <span class="avatar">SC</span>
-              <span><strong>Missed call</strong> from <strong>Sarah</strong></span>
-              <span class="time">12:14</span>
+          <!-- Scene 1: Sarah -->
+          <div class="scene" data-scene="sarah">
+            <div class="hero-bubbles">
+              <div class="bubble b1">
+                <span class="avatar">SC</span>
+                <span><strong>Missed call</strong> from <strong>Sarah</strong></span>
+                <span class="time">12:14</span>
+              </div>
+              <div class="bubble me b2">
+                <span class="avatar" style="background:linear-gradient(135deg,var(--aqua-dark),#27b3a1)">AI</span>
+                <span>Hi Sarah — we've got you! Want to book a consultation?</span>
+              </div>
+              <div class="bubble me b3">
+                <span class="avatar" style="background:linear-gradient(135deg,var(--aqua-dark),#27b3a1)">AI</span>
+                <span class="typing"><i></i><i></i><i></i></span>
+              </div>
+              <div class="bubble book b4">
+                <span class="avatar" style="background:#0aa587">✓</span>
+                <span><strong>Booked:</strong> Tue • 3:00 PM — confirmation sent</span>
+              </div>
             </div>
+          </div>
 
-            <div class="bubble me b2">
-              <span class="avatar" style="background:linear-gradient(135deg,var(--aqua-dark),#27b3a1)">AI</span>
-              <span>Hi Sarah — we've got you! Want to book a consultation?</span>
+          <!-- Scene 2: Daniel -->
+          <div class="scene" data-scene="daniel">
+            <div class="hero-bubbles">
+              <div class="bubble b1">
+                <span class="avatar">SC</span>
+                <span><strong>Missed call</strong> from <strong>Daniel</strong></span>
+                <span class="time">09:22</span>
+              </div>
+              <div class="bubble me b2">
+                <span class="avatar" style="background:linear-gradient(135deg,var(--aqua-dark),#27b3a1)">AI</span>
+                <span>Hi Daniel — IV therapy or injectables today? I can hold a spot.</span>
+              </div>
+              <div class="bubble me b3">
+                <span class="avatar" style="background:linear-gradient(135deg,var(--aqua-dark),#27b3a1)">AI</span>
+                <span class="typing"><i></i><i></i><i></i></span>
+              </div>
+              <div class="bubble book b4">
+                <span class="avatar" style="background:#0aa587">✓</span>
+                <span><strong>Booked:</strong> Thu • 11:30 AM — text confirmation sent</span>
+              </div>
             </div>
+          </div>
 
-            <div class="bubble me b2" style="animation-delay:1.9s">
-              <span class="avatar" style="background:linear-gradient(135deg,var(--aqua-dark),#27b3a1)">AI</span>
-              <span class="typing"><i></i><i></i><i></i></span>
-            </div>
-
-            <div class="bubble book b3">
-              <span class="avatar" style="background:#0aa587">✓</span>
-              <span><strong>Booked:</strong> Tue • 3:00 PM — confirmation sent</span>
+          <!-- Scene 3: Priya -->
+          <div class="scene" data-scene="priya">
+            <div class="hero-bubbles">
+              <div class="bubble b1">
+                <span class="avatar">SC</span>
+                <span><strong>Missed call</strong> from <strong>Priya</strong></span>
+                <span class="time">18:17</span>
+              </div>
+              <div class="bubble me b2">
+                <span class="avatar" style="background:linear-gradient(135deg,var(--aqua-dark),#27b3a1)">AI</span>
+                <span>Hi Priya — can do a hydrafacial tomorrow. Want 4 PM?</span>
+              </div>
+              <div class="bubble me b3">
+                <span class="avatar" style="background:linear-gradient(135deg,var(--aqua-dark),#27b3a1)">AI</span>
+                <span class="typing"><i></i><i></i><i></i></span>
+              </div>
+              <div class="bubble book b4">
+                <span class="avatar" style="background:#0aa587">✓</span>
+                <span><strong>Booked:</strong> Fri • 4:00 PM — calendar invite sent</span>
+              </div>
             </div>
           </div>
         </div>
@@ -541,6 +591,37 @@
       })
       .catch(()=>{ error.style.display = 'block'; });
     });
+  })();
+
+  // ---- HERO multi-scene rotator (staggered so the card is never empty) ----
+  (function(){
+    const scenes = Array.from(document.querySelectorAll('.hero-anim .scene'));
+    if(!scenes.length) return;
+
+    const DURATION = 7000;   // each scene's bubble timeline
+    const STAGGER  = 2500;   // 2–3s between scene starts (here: 2.5s)
+
+    // Start (or restart) a scene: fade in + play its bubbles from the beginning
+    function play(scene){
+      // restart all bubble animations
+      scene.querySelectorAll('.bubble').forEach(b=>{
+        b.style.animation = 'none'; b.offsetHeight; // force reflow
+        // restore original animation (matches CSS .bubble definition)
+        b.style.animation = 'bubbleIn 6.8s linear both';
+      });
+      scene.classList.add('active');
+      setTimeout(()=> scene.classList.remove('active'), DURATION);
+    }
+
+    // seed the three scenes with a stagger so there's always activity
+    scenes.forEach((s, i)=> setTimeout(()=> play(s), i*STAGGER));
+
+    // keep triggering a new scene start every STAGGER ms (round-robin)
+    let idx = scenes.length;
+    setInterval(()=>{
+      play(scenes[idx % scenes.length]);
+      idx++;
+    }, STAGGER);
   })();
 </script>
 </body>
