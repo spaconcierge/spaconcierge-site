@@ -43,11 +43,12 @@
   <link rel="dns-prefetch" href="//fonts.gstatic.com">
   <link rel="dns-prefetch" href="//www.googletagmanager.com">
   <link rel="dns-prefetch" href="//calendly.com">
+  <link rel="preload" href="/spaconcierge_logo_monogram.svg" as="image" type="image/svg+xml">
 
   <!-- Fonts -->
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 
-  <!-- Calendly popup widget (used for inline modal) -->
+  <!-- Calendly popup widget (for inline modal) -->
   <link href="https://assets.calendly.com/assets/external/widget.css" rel="stylesheet">
   <script src="https://assets.calendly.com/assets/external/widget.js" async></script>
 
@@ -71,8 +72,8 @@
     header{position:sticky;top:0;z-index:50;backdrop-filter:saturate(140%) blur(10px);background:rgba(255,255,255,.82);border-bottom:1px solid var(--line);transition:box-shadow .25s ease}
     header.scrolled{box-shadow:0 2px 20px rgba(0,0,0,.06)}
     .nav{display:flex;justify-content:space-between;align-items:center;height:74px}
-    .brand{font-family:'Montserrat',sans-serif;font-weight:700;font-size:20px;display:flex;align-items:center;gap:8px}
-    .brand-badge{width:18px;height:18px;background:linear-gradient(135deg,var(--aqua),#b8fff4);border-radius:5px}
+    .brand{font-family:'Montserrat',sans-serif;font-weight:700;font-size:20px;display:flex;align-items:center;gap:10px}
+    .brand-logo{width:26px;height:26px;display:block}
     .nav-cta{display:flex;gap:10px}
 
     /* Buttons */
@@ -106,14 +107,14 @@
     .stat{background:#ffffff;border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:var(--glow)}
     .stat b{display:block;font-size:26px;font-family:'Montserrat',sans-serif}
 
-    /* FAQ (restored + polished) */
+    /* FAQ (polished) */
     .faq-list{display:grid;gap:12px}
     .faq-item{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff}
     .faq-q{cursor:pointer;padding:16px 18px;font-weight:700;display:flex;justify-content:space-between;align-items:center}
     .faq-q span{display:inline-block;transition:transform .25s ease;color:#94a3b8;font-weight:800}
     .faq-a{max-height:0;overflow:hidden;transition:max-height .35s ease, padding .35s ease;color:var(--muted);padding:0 18px 0 18px}
-    .faq-item.active .faq-a{max-height:300px;padding:0 18px 16px 18px}
-    .faq-item.active .faq-q span{transform:rotate(45deg)} /* turns + into × */
+    .faq-item.active .faq-a{padding:0 18px 16px 18px}
+    .faq-item.active .faq-q span{transform:rotate(45deg)} /* + to × */
 
     /* Contact form */
     .contact{background:linear-gradient(180deg,#f7fffe,#ffffff)}
@@ -181,7 +182,10 @@
 
 <header id="site-header">
   <div class="container nav">
-    <div class="brand"><span class="brand-badge" aria-hidden="true"></span>SpaConcierge</div>
+    <div class="brand">
+      <img class="brand-logo" src="/spaconcierge_logo_monogram.svg" alt="" width="26" height="26">
+      <span>SpaConcierge</span>
+    </div>
     <div class="nav-cta">
       <a class="btn btn-secondary" href="mailto:matt@getspaconcierge.com" data-cta="email">Email Us</a>
       <a class="btn btn-primary cal-link"
@@ -254,28 +258,16 @@
       <div class="section-title">Frequently Asked Questions</div>
       <div class="faq-list">
         <div class="faq-item reveal">
-          <div class="faq-q" role="button" aria-expanded="false">
-            Do we need to change our phone number? <span aria-hidden="true">+</span>
-          </div>
-          <div class="faq-a" aria-hidden="true">
-            No — you keep your current number. We just add forwarding for missed calls.
-          </div>
+          <div class="faq-q" role="button" aria-expanded="false">Do we need to change our phone number? <span aria-hidden="true">+</span></div>
+          <div class="faq-a" aria-hidden="true">No — you keep your current number. We just add forwarding for missed calls.</div>
         </div>
         <div class="faq-item reveal">
-          <div class="faq-q" role="button" aria-expanded="false">
-            Is this HIPAA compliant? <span aria-hidden="true">+</span>
-          </div>
-          <div class="faq-a" aria-hidden="true">
-            We use HIPAA-aware workflows and secure storage practices. (We don’t claim certification.)
-          </div>
+          <div class="faq-q" role="button" aria-expanded="false">Is this HIPAA compliant? <span aria-hidden="true">+</span></div>
+          <div class="faq-a" aria-hidden="true">We use HIPAA-aware workflows and secure storage practices. (We don’t claim certification.)</div>
         </div>
         <div class="faq-item reveal">
-          <div class="faq-q" role="button" aria-expanded="false">
-            How fast can we start? <span aria-hidden="true">+</span>
-          </div>
-          <div class="faq-a" aria-hidden="true">
-            Most spas are live within a day.
-          </div>
+          <div class="faq-q" role="button" aria-expanded="false">How fast can we start? <span aria-hidden="true">+</span></div>
+          <div class="faq-a" aria-hidden="true">Most spas are live within a day.</div>
         </div>
       </div>
     </div>
@@ -343,10 +335,10 @@
     </div>
   </section>
 
-  <!-- CTA Banner (centered) -->
+  <!-- CTA Banner -->
   <section>
     <div class="container cta-banner reveal">
-      <h2 style="margin:0">Ready to recover missed bookings?</h2>
+      <div><h2 style="margin:0">Ready to recover missed bookings?</h2></div>
       <div class="cta-row">
         <a class="btn btn-primary cal-link"
            href="https://calendly.com/matt-getspaconcierge/new-meeting"
@@ -373,15 +365,18 @@
   },{threshold:.1});
   revealEls.forEach(el=>io.observe(el));
 
-  // FAQ accordion (kept)
+  // FAQ accordion (with smooth height + ARIA updates)
   document.querySelectorAll('.faq-item').forEach(item=>{
     const q = item.querySelector('.faq-q');
     const a = item.querySelector('.faq-a');
     q.addEventListener('click', ()=>{
-      const open = item.classList.toggle('active');
-      q.setAttribute('aria-expanded', open ? 'true' : 'false');
-      a.setAttribute('aria-hidden', open ? 'false' : 'true');
+      const isOpen = item.classList.toggle('active');
+      q.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      a.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+      a.style.maxHeight = isOpen ? (a.scrollHeight + 'px') : '0px';
     });
+    // ensure collapsed state has zero height
+    a.style.maxHeight = '0px';
   });
 
   // Year
@@ -408,7 +403,7 @@
     });
   });
 
-  // Calendly inline popup: open modal & still keep href as fallback
+  // Calendly inline popup (fallbacks to href if JS off)
   function openCalendly(e){
     const link = e.currentTarget;
     if (!window.Calendly || link.dataset.cal !== 'popup') return; // fallback to href
@@ -427,7 +422,7 @@
     function encodeForm(fd){ return new URLSearchParams(fd).toString(); }
 
     form.addEventListener('submit', function(e){
-      e.preventDefault(); // fallback still works without JS
+      e.preventDefault(); // without JS, default POST still works
       const success = document.getElementById('contact-success');
       const error   = document.getElementById('contact-error');
       success.style.display = 'none';
