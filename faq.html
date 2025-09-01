@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <!-- GA4 -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-5Y0D6FR8Z2"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){ dataLayer.push(arguments); }
+    gtag('js', new Date());
+    gtag('config', 'G-5Y0D6FR8Z2');
+  </script>
+
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#5ED5C3">
+
+  <title>FAQ — SpaConcierge</title>
+  <meta name="description" content="Answers to setup, integrations, after-hours coverage, consent, HIPAA-aware workflows, reporting, and pricing for SpaConcierge." />
+  <link rel="canonical" href="https://www.getspaconcierge.com/faq">
+  <meta name="robots" content="index,follow,max-image-preview:large">
+
+  <!-- Open Graph / Twitter -->
+  <meta property="og:title" content="FAQ — SpaConcierge">
+  <meta property="og:description" content="Answers to setup, integrations, after-hours coverage, consent, HIPAA-aware workflows, reporting, and pricing for SpaConcierge.">
+  <meta property="og:url" content="https://www.getspaconcierge.com/faq">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="https://www.getspaconcierge.com/og-image-1200x630.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="FAQ — SpaConcierge">
+  <meta name="twitter:description" content="Answers to setup, integrations, after-hours coverage, consent, HIPAA-aware workflows, reporting, and pricing for SpaConcierge.">
+  <meta name="twitter:image" content="https://www.getspaconcierge.com/og-image-1200x630.png">
+
+  <!-- Favicons -->
+  <link rel="icon" href="/favicon.ico">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">
+  <link rel="icon" type="image/png" href="/android-chrome-192x192.png" sizes="192x192">
+  <link rel="icon" type="image/png" href="/android-chrome-512x512.png" sizes="512x512">
+
+  <!-- Perf hints -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="dns-prefetch" href="//fonts.googleapis.com">
+  <link rel="dns-prefetch" href="//fonts.gstatic.com">
+  <link rel="dns-prefetch" href="//www.googletagmanager.com">
+  <link rel="dns-prefetch" href="//calendly.com">
+  <link rel="preload" href="/spaconcierge_logo_monogram.svg" as="image" type="image/svg+xml">
+
+  <!-- Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <!-- Calendly popup widget -->
+  <link href="https://assets.calendly.com/assets/external/widget.css" rel="stylesheet">
+  <script src="https://assets.calendly.com/assets/external/widget.js" async></script>
+
+  <style>
+    :root{
+      --aqua:#5ED5C3; --aqua-dark:#2aa697;
+      --charcoal:#1f252b; --muted:#6a7682; --line:#eef1f4;
+      --glow:0 10px 30px rgba(0,0,0,.08); --glow-strong:0 30px 80px rgba(0,0,0,.15);
+      --max:1100px;
+    }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Inter',system-ui,Segoe UI,Roboto,Arial,sans-serif;color:var(--charcoal);line-height:1.6;background:#fff}
+    a{color:inherit;text-decoration:none}
+    .container{max-width:var(--max);margin:0 auto;padding:0 22px}
+
+    /* Header / Nav */
+    header{position:sticky;top:0;z-index:50;backdrop-filter:saturate(140%) blur(10px);background:rgba(255,255,255,.82);border-bottom:1px solid var(--line);transition:box-shadow .25s ease}
+    header.scrolled{box-shadow:0 2px 20px rgba(0,0,0,.06)}
+    .nav{display:flex;justify-content:space-between;align-items:center;height:74px}
+    .brand{font-family:'Montserrat',sans-serif;font-weight:700;font-size:20px;display:flex;align-items:center;gap:10px}
+    .brand-logo{width:26px;height:26px;display:block}
+    .nav-cta{display:flex;gap:10px}
+    .btn{padding:12px 20px;border-radius:999px;font-weight:600;transition:transform .22s ease, box-shadow .22s ease, background .22s ease;display:inline-block}
+    .btn-primary{background:var(--aqua);color:#fff;box-shadow:var(--glow)}
+    .btn-primary:hover{background:var(--aqua-dark);transform:translateY(-2px);box-shadow:var(--glow-strong)}
+    .btn-secondary{border:2px solid var(--aqua);color:var(--aqua);background:#fff}
+    .btn-secondary:hover{background:#eafffa;transform:translateY(-2px)}
+
+    /* Page Hero */
+    .page-hero{padding:70px 0 10px;background:linear-gradient(135deg,#f6fffd,#e8fcf7)}
+    .page-hero h1{font-family:'Montserrat',sans-serif;font-size:40px;line-height:1.15;margin-bottom:8px;text-align:center}
+    .page-hero p{color:var(--muted);text-align:center}
+
+    /* FAQ (polished accordion) */
+    section{padding:40px 0}
+    .section-title{font-family:'Montserrat',sans-serif;font-size:28px;margin-bottom:12px;text-align:center}
+    .faq-wrap{max-width:900px;margin:0 auto}
+    .faq-list{display:grid;gap:12px}
+    .faq-item{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff}
+    .faq-q{cursor:pointer;padding:16px 18px;font-weight:700;display:flex;justify-content:space-between;align-items:center}
+    .faq-q span{display:inline-block;transition:transform .25s ease;color:#94a3b8;font-weight:800}
+    .faq-a{max-height:0;overflow:hidden;transition:max-height .35s ease, padding .35s ease,color .35s ease;color:var(--muted);padding:0 18px 0 18px}
+    .faq-item.active .faq-a{padding:0 18px 16px 18px}
+    .faq-item.active .faq-q span{transform:rotate(45deg)} /* + to × */
+
+    /* CTA Banner (centered) */
+    .cta-banner{background:linear-gradient(135deg,#00c2a8,#009b85);color:#fff;border-radius:20px;padding:40px;margin:40px auto 0;max-width:900px;text-align:center;box-shadow:var(--glow)}
+    .cta-row{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+
+    footer{text-align:center;padding:40px 20px;color:var(--muted);border-top:1px solid var(--line)}
+
+    /* Reveal */
+    .reveal{opacity:0;transform:translateY(20px);transition:opacity .6s ease, transform .6s ease}
+    .reveal.show{opacity:1;transform:translateY(0)}
+
+    @media (prefers-reduced-motion: reduce){
+      .btn,.reveal,.faq-q,.faq-a{transition:none !important}
+      .btn:hover{transform:none !important}
+    }
+  </style>
+
+  <!-- JSON-LD -->
+  <script type="application/ld+json">
+  {"@context":"https://schema.org","@type":"Organization","name":"SpaConcierge","url":"https://www.getspaconcierge.com","email":"matt@getspaconcierge.com","logo":"https://www.getspaconcierge.com/android-chrome-512x512.png","sameAs":[]}
+  </script>
+</head>
+<body>
+<a href="#main" class="skip">Skip to content</a>
+
+<header id="site-header">
+  <div class="container nav">
+    <div class="brand">
+      <img class="brand-logo" src="/spaconcierge_logo_monogram.svg" alt="" width="26" height="26">
+      <span>SpaConcierge</span>
+    </div>
+    <div class="nav-cta">
+      <a class="btn btn-secondary" href="/" data-cta="home">Home</a>
+      <a class="btn btn-secondary" href="mailto:matt@getspaconcierge.com" data-cta="email">Email Us</a>
+      <a class="btn btn-primary cal-link" href="https://calendly.com/matt-getspaconcierge/new-meeting" data-cal="popup" data-cta="demo">Book a Demo</a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <!-- PAGE HERO -->
+  <section class="page-hero reveal">
+    <div class="container">
+      <h1>Frequently Asked Questions</h1>
+      <p>Clear answers on setup, coverage, handoffs, consent, reporting, and more.</p>
+    </div>
+  </section>
+
+  <!-- FAQ BODY -->
+  <section>
+    <div class="container faq-wrap">
+      <div class="section-title">All the details, no fluff</div>
+
+      <div class="faq-list">
+        <!-- Usefully-expanded FAQ (same structure as your main page) -->
+        <div class="faq-item reveal">
+          <div class="faq-q" role="button" aria-expanded="false">
+            What happens after a missed call? <span aria-hidden="true">+</span>
+          </div>
+          <div class="faq-a" aria-hidden="true">
+            We text the caller within ~60 seconds, introduce your clinic, and help them book or get answers. If needed, we escalate to your team—no loops.
+          </div>
+        </div>
+
+        <div class="faq-item reveal">
+          <div class="faq-q" role="button" aria-expanded="false">
+            Which calendars or booking systems work with this? <span aria-hidden="true">+</span>
+          </div>
+          <div class="faq-a" aria-hidden="true">
+            We support link-based booking flows and can mirror availability from common med-spa platforms. Where direct APIs aren't available, we confirm final times with your team to avoid double-booking.
+          </div>
+        </div>
+
+        <div class="faq-item reveal">
+          <div class="faq-q" role="button" aria-expanded="false">
+            Do we have to change our number? <span aria-hidden="true">+</span>
+          </div>
+          <div class="faq-a" aria-hidden="true">
+            No. You keep your number. We add conditional forwarding for "no answer / busy / after hours," so callers always see your existing number.
+          </div>
+        </div>
+
+        <div class="faq-item reveal">
+          <div class="faq-q" role="button" aria-expanded="false">
+            Is there after-hours coverage? <span aria-hidden="true">+</span>
+          </div>
+          <div class="faq-a" aria-hidden="true">
+            Yes—24/7. Overnight activity is summarized for your team each morning.
+          </div>
+        </div>
+
+        <div class="faq-item reveal">
+          <div class="faq-q" role="button" aria-expanded="false">
+            How does human handoff work? <span aria-hidden="true">+</span>
+          </div>
+          <div class="faq-a" aria-hidden="true">
+            If a question is clinical, unusual, or high-value, we flag it and route to your team (SMS/email). You can set rules for when to escalate.
+          </div>
+        </div>
+
+        <div class="faq-item reveal">
+          <div class="faq-q" role="button" aria-expanded="false">
+            Can we control tone, pricing, and policy answers? <span aria-hidden="true">+</span>
+          </div>
+          <div class="faq-a" aria-hidden="true">
+            Yes. We load your brand voice, current pricing, promotions, cancellation/deposit policies, pre-/post-care notes, and FAQs. You can update these anytime.
+          </div>
+        </div>
+
+        <div class="faq-item reveal">
+          <div class="faq-q" role="button" aria-expanded="false">
+            What about consent and opt-outs? <span aria-hidden="true">+</span>
+          </div>
+          <div class="faq-a" aria-hidden="true">
+            We respect standard opt-out keywords (e.g., "STOP"). We provide short consent language for your voicemail and intake forms; use where required by your local regulations.
+          </div>
+        </div>
+
+        <div class="faq-item reveal">
+          <div class="faq-q" role="button" aria-expanded="false">
+            HIPAA and privacy? <span aria-hidden="true">+</span>
+          </div>
+          <div class="faq-a" aria-hidden="true">
+            We use HIPAA-aware workflows and secure storage practices. We avoid PHI in text; sensitive items are routed to secure channels or staff review.
+          </div>
+        </div>
+
+        <div class="faq-item reveal">
+          <div class="faq-q" role="button" aria-expanded="false">
+            How do you handle spam or wrong numbers? <span aria-hidden="true">+</span>
+          </div>
+          <div class="faq-a" aria-hidden="true">
+            We filter obvious spam and throttle suspicious patterns. You'll see a transparent log of conversations for review.
+          </div>
+        </div>
+
+        <div class="faq-item reveal">
+          <div class="faq-q" role="button" aria-expanded="false">
+            Can it support multiple locations or numbers? <span aria-hidden="true">+</span>
+          </div>
+          <div class="faq-a" aria-hidden="true">
+            Yes. We route by location, source number, or keywords (e.g., "Downtown"). Reporting can be split per location, too.
+          </div>
+        </div>
+
+        <div class="faq-item reveal">
+          <div class="faq-q" role="button" aria-expanded="false">
+            Languages supported? <span aria-hidden="true">+</span>
+          </div>
+          <div class="faq-a" aria-hidden="true">
+            English by default; Spanish on request. Additional languages upon review of volume and content needs.
+          </div>
+        </div>
+
+        <div class="faq-item reveal">
+          <div class="faq-q" role="button" aria-expanded="false">
+            Deposits and cancellation policies? <span aria-hidden="true">+</span>
+          </div>
+          <div class="faq-a" aria-hidden="true">
+            We can send your deposit link, collect confirmations acknowledging your policy, and tag the booking with the confirmation.
+          </div>
+        </div>
+
+        <div class="faq-item reveal">
+          <div class="faq-q" role="button" aria-expanded="false">
+            What reporting do we get? <span aria-hidden="true">+</span>
+          </div>
+          <div class="faq-a" aria-hidden="true">
+            Weekly summary: missed calls recovered, new leads captured, bookings confirmed, average response time, and reminder impact on no-shows.
+          </div>
+        </div>
+
+        <div class="faq-item reveal">
+          <div class="faq-q" role="button" aria-expanded="false">
+            Trial and cancellation? <span aria-hidden="true">+</span>
+          </div>
+          <div class="faq-a" aria-hidden="true">
+            Start with a short pilot. No long contracts—cancel anytime before the next cycle.
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section>
+    <div class="container cta-banner reveal">
+      <h2 style="margin:0">Ready to recover missed bookings?</h2>
+      <div class="cta-row">
+        <a class="btn btn-primary cal-link" href="https://calendly.com/matt-getspaconcierge/new-meeting" data-cal="popup" data-cta="demo">Book a Demo</a>
+        <a class="btn btn-secondary" href="mailto:matt@getspaconcierge.com" data-cta="email">Email Us</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  © <span id="y"></span> SpaConcierge — <a href="mailto:matt@getspaconcierge.com">matt@getspaconcierge.com</a>
+</footer>
+
+<script>
+  // Sticky header shadow
+  const hdr = document.getElementById('site-header');
+  addEventListener('scroll', () => hdr.classList.toggle('scrolled', scrollY > 6));
+
+  // Reveal on scroll
+  const revealEls = document.querySelectorAll('.reveal');
+  const io = new IntersectionObserver((entries)=>{
+    entries.forEach(e=>{ if(e.isIntersecting){ e.target.classList.add('show'); io.unobserve(e.target); } })
+  },{threshold:.1});
+  revealEls.forEach(el=>io.observe(el));
+
+  // Accordion (same behavior as main)
+  document.querySelectorAll('.faq-item').forEach(item=>{
+    const q = item.querySelector('.faq-q');
+    const a = item.querySelector('.faq-a');
+    q.addEventListener('click', ()=>{
+      const isOpen = item.classList.toggle('active');
+      q.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      a.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+      a.style.maxHeight = isOpen ? (a.scrollHeight + 'px') : '0px';
+    });
+    a.style.maxHeight = '0px';
+  });
+
+  // Year
+  document.getElementById('y').textContent = new Date().getFullYear();
+
+  // UTM passthrough to Calendly
+  (function(){
+    const utm = location.search;
+    if(!utm) return;
+    document.querySelectorAll('a[href*="calendly.com/matt-getspaconcierge"]').forEach(a=>{
+      try{ const u = new URL(a.href); u.search += (u.search ? '&' : '') + utm.slice(1); a.href = u.toString(); }catch(e){}
+    });
+  })();
+
+  // GA4 CTA click tracking (covers all [data-cta])
+  function track(eventName, params){ try{ gtag('event', eventName, params||{}); }catch(e){} }
+  document.querySelectorAll('[data-cta]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const id = el.dataset.cta || 'cta';
+      const label = el.textContent.trim();
+      track('select_content', {content_type:'cta', content_id:id, label});
+      if(id.includes('demo')) track('click_demo', {event_category:'CTA', event_label:label});
+      if(id.includes('email')) track('click_email', {event_category:'CTA', event_label:el.href});
+    });
+  });
+
+  // Calendly inline popup (fallbacks to href if JS off)
+  function openCalendly(e){
+    const link = e.currentTarget;
+    if (!window.Calendly || link.dataset.cal !== 'popup') return;
+    e.preventDefault();
+    Calendly.initPopupWidget({ url: link.href });
+    track('calendly_popup_open', {event_category:'CTA', event_label: link.textContent.trim() });
+  }
+  document.querySelectorAll('.cal-link').forEach(a=>a.addEventListener('click', openCalendly));
+
+  // Netlify Forms AJAX enhancement (safe to keep; early-returns if no form)
+  (function(){
+    const form = document.getElementById('contact-form');
+    if(!form) return;
+    form.querySelector('input[name="page"]').value = location.href;
+    function encodeForm(fd){ return new URLSearchParams(fd).toString(); }
+    form.addEventListener('submit', function(e){
+      e.preventDefault();
+      const success = document.getElementById('contact-success');
+      const error   = document.getElementById('contact-error');
+      if(success) success.style.display = 'none';
+      if(error)   error.style.display   = 'none';
+      const fd = new FormData(form);
+      fetch('/', { method:'POST', headers:{ 'Content-Type':'application/x-www-form-urlencoded' }, body: encodeForm(fd) })
+      .then(()=>{ if(form) form.reset(); if(success) success.style.display='block'; track('contact_submit', {event_category:'Form', event_label:'contact'}); track('generate_lead', {event_category:'Form', event_label:'contact'}); })
+      .catch(()=>{ if(error) error.style.display='block'; });
+    });
+  })();
+</script>
+</body>
+</html>
