@@ -68,6 +68,8 @@
     /* Skip link */
     .skip{position:absolute;left:-9999px;top:-9999px}
     .skip:focus{left:12px;top:12px;background:#fff;padding:8px 12px;border-radius:10px;z-index:100;box-shadow:var(--glow)}
+    /* Remove the skip link entirely */
+    .skip { display: none !important; }
 
     /* Header / Nav */
     header{position:sticky;top:0;z-index:50;backdrop-filter:saturate(140%) blur(10px);background:rgba(255,255,255,.82);border-bottom:1px solid var(--line);transition:box-shadow .25s ease}
