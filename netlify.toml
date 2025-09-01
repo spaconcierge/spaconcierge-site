@@ -1,1 +1,13 @@
+[build]
+  publish = "."
+  functions = "netlify/functions"
 
+[functions]
+  node_bundler = "esbuild"
+  external_node_modules = ["twilio","googleapis","@slack/webhook"]
+
+# Clean /api/* endpoints
+[[redirects]]
+  from = "/api/*"
+  to   = "/.netlify/functions/:splat"
+  status = 200
