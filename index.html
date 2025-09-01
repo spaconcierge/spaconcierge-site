@@ -292,6 +292,23 @@
       .chat-card{ width:100%; max-width:none }
       .mock{ min-height:460px }
     }
+
+    /* ROI calculator */
+    .roi-form{margin-top:6px;margin-bottom:14px}
+    .roi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+    .roi-field{display:flex;flex-direction:column;gap:8px;background:#fff;border:1px solid var(--line);
+      border-radius:12px;padding:12px;box-shadow:var(--glow)}
+    .roi-field span{font-weight:600;font-size:14px;color:#364152}
+    .roi-field input{width:100%;border:1px solid #e3e8ee;border-radius:10px;padding:10px 12px;font-size:15px}
+    .roi-input-affix{display:flex;align-items:center;gap:8px}
+    .roi-input-affix .affix{font-weight:700;color:#6a7682}
+    .roi-results{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:8px}
+    .roi-card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:var(--glow);text-align:center}
+    .roi-label{color:#6a7682;font-weight:600;margin-bottom:6px}
+    .roi-num{font-family:'Montserrat',sans-serif;font-size:26px}
+    .roi-cta{display:flex;gap:12px;align-items:center;margin-top:16px}
+    .roi-note{font-size:12px;color:var(--muted)}
+    @media(max-width:900px){ .roi-grid,.roi-results{grid-template-columns:1fr 1fr} }
   </style>
 
   <!-- JSON-LD: Organization -->
@@ -376,6 +393,73 @@
         <div class="stat reveal"><b>+10–25</b> extra bookings / month</div>
         <div class="stat reveal"><b>&lt; 60s</b> first reply, even after hours</div>
         <div class="stat reveal"><b>−30%</b> no-shows with reminders</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ROI CALCULATOR -->
+  <section id="roi" aria-labelledby="roi-title">
+    <div class="container">
+      <h2 id="roi-title" class="section-title">Estimate your monthly ROI</h2>
+      <p class="sub">Tweak the numbers to match your clinic.</p>
+
+      <form class="roi-form" autocomplete="off">
+        <div class="roi-grid">
+          <label class="roi-field">
+            <span>Missed calls per week</span>
+            <input type="number" id="roi-missed" min="0" step="1" value="12" inputmode="numeric">
+          </label>
+
+          <label class="roi-field">
+            <span>Recapture rate</span>
+            <div class="roi-input-affix">
+              <input type="number" id="roi-rate" min="0" max="100" step="1" value="35">
+              <span class="affix">%</span>
+            </div>
+          </label>
+
+          <label class="roi-field">
+            <span>Avg booking value</span>
+            <div class="roi-input-affix">
+              <span class="affix">$</span>
+              <input type="number" id="roi-value" min="0" step="10" value="200">
+            </div>
+          </label>
+
+          <label class="roi-field">
+            <span>Monthly plan cost</span>
+            <div class="roi-input-affix">
+              <span class="affix">$</span>
+              <input type="number" id="roi-cost" min="0" step="10" value="499">
+            </div>
+          </label>
+        </div>
+      </form>
+
+      <div class="roi-results">
+        <div class="roi-card">
+          <div class="roi-label">Recovered bookings / month</div>
+          <div class="roi-num" id="roi-bookings">0</div>
+        </div>
+        <div class="roi-card">
+          <div class="roi-label">Recovered revenue / month</div>
+          <div class="roi-num" id="roi-revenue">$0</div>
+        </div>
+        <div class="roi-card">
+          <div class="roi-label">Break-even bookings</div>
+          <div class="roi-num" id="roi-breakeven">0</div>
+        </div>
+        <div class="roi-card">
+          <div class="roi-label">ROI multiple</div>
+          <div class="roi-num" id="roi-multiple">0×</div>
+        </div>
+      </div>
+
+      <div class="roi-cta">
+        <a class="btn btn-primary cal-link"
+           href="https://calendly.com/matt-getspaconcierge/new-meeting"
+           data-cal="popup" data-cta="demo">See it with your numbers</a>
+        <span class="roi-note">This is an estimate, not a guarantee.</span>
       </div>
     </div>
   </section>
@@ -722,6 +806,52 @@
         i++;
       }
     })();
+  })();
+
+  // ROI calculator (animated outputs; fires GA4 event via track())
+  (function(){
+    const qs = s => document.querySelector(s);
+    const missed=qs('#roi-missed'), rate=qs('#roi-rate'), value=qs('#roi-value'), cost=qs('#roi-cost');
+    const outB=qs('#roi-bookings'), outR=qs('#roi-revenue'), outBE=qs('#roi-breakeven'), outM=qs('#roi-multiple');
+    if(!missed||!rate||!value||!outB) return;
+
+    const weeksPerMonth = 4.3;
+    const clamp = (n,min,max)=>Math.min(Math.max(n,min),max);
+
+    function fmtMoney(n){ return n.toLocaleString(undefined,{style:'currency',currency:'USD',maximumFractionDigits:0}); }
+    function animateNum(el, to, prefix='', suffix='', dur=500){
+      const from = parseFloat(el.dataset.val||0);
+      const start = performance.now();
+      function tick(now){
+        const p = Math.min(1,(now-start)/dur);
+        const val = from + (to-from)*p;
+        el.textContent = prefix + (suffix==='×' ? (val).toFixed(1) : Math.round(val).toLocaleString()) + suffix;
+        if(p<1) requestAnimationFrame(tick); else el.dataset.val = to;
+      }
+      requestAnimationFrame(tick);
+    }
+
+    function calc(){
+      const m = Math.max(0, +missed.value||0);
+      const r = clamp(+rate.value||0,0,100)/100;
+      const v = Math.max(0, +value.value||0);
+      const c = Math.max(0, +cost.value||0);
+
+      const bookings = m * r * weeksPerMonth;
+      const revenue  = bookings * v;
+      const breakeven = v>0 ? Math.ceil(c / v) : 0;
+      const multiple  = c>0 ? revenue / c : 0;
+
+      animateNum(outB, bookings, '', '');
+      outR.textContent = fmtMoney(revenue); outR.dataset.val = revenue;
+      animateNum(outBE, breakeven, '', '');
+      animateNum(outM, multiple, '', '×');
+
+      try{ track('roi_update', {missed:m, rate:r, value:v, cost:c, revenue:Math.round(revenue)}); }catch(e){}
+    }
+
+    [missed,rate,value,cost].forEach(i=>i.addEventListener('input', calc));
+    calc();
   })();
 </script>
 </body>
