@@ -109,6 +109,61 @@
     }
     @keyframes float{ 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
 
+    /* --- HERO ANIMATION (chat/booking preview) --- */
+    .hero-anim{position:absolute; inset:0; display:grid; place-items:center; pointer-events:none}
+    .hero-bubbles{width:min(520px,70%); display:grid; gap:12px;}
+
+    /* message cards */
+    .bubble{
+      background:#fff; border:1px solid var(--line); border-radius:14px;
+      padding:12px 14px; box-shadow:var(--glow);
+      display:flex; align-items:center; gap:10px;
+      opacity:0; transform:translateY(12px);
+      animation:bubbleIn 8s linear infinite;
+      font-size:15px;
+    }
+    .bubble strong{font-weight:700}
+    .bubble .time{margin-left:auto; color:#9aa7b3; font-size:12px}
+
+    /* variants */
+    .bubble.me{background:linear-gradient(135deg,#f6fffd,#e8fcf7)}
+    .bubble.book{background:linear-gradient(135deg,#e6fff8,#ffffff); border-color:#d0f4eb}
+
+    /* avatar chip */
+    .avatar{
+      width:28px;height:28px;border-radius:50%;
+      background:linear-gradient(135deg,#0f3034,#193b40);
+      color:#fff; display:grid; place-items:center; font-size:12px; font-weight:700;
+      box-shadow:0 6px 14px rgba(0,0,0,.12)
+    }
+
+    /* typing dots */
+    .typing{display:inline-flex; gap:4px}
+    .typing i{
+      width:6px;height:6px;border-radius:50%; background:#90cfc6; opacity:.3;
+      animation:blink 1.2s infinite ease-in-out;
+    }
+    .typing i:nth-child(2){animation-delay:.15s}
+    .typing i:nth-child(3){animation-delay:.3s}
+
+    /* timeline loop (each bubble has its own delay) */
+    .b1{animation-delay:.0s}
+    .b2{animation-delay:1.2s}
+    .b3{animation-delay:2.8s}
+
+    /* keyframes */
+    @keyframes bubbleIn{
+      0%   {opacity:0; transform:translateY(12px)}
+      8%   {opacity:1; transform:translateY(0)}
+      28%  {opacity:1; transform:translateY(0)}
+      38%  {opacity:0; transform:translateY(-6px)}
+      100% {opacity:0; transform:translateY(-6px)}
+    }
+    @keyframes blink{
+      0%,100%{opacity:.35; transform:translateY(0)}
+      50%   {opacity:1;   transform:translateY(-1px)}
+    }
+
     /* Sections */
     section{padding:70px 0}
     .section-title{font-family:'Montserrat',sans-serif;font-size:28px;margin-bottom:12px}
@@ -227,10 +282,31 @@
         </div>
       </div>
 
-      <!-- Hero card with centered monogram logo -->
-      <div class="mock reveal" role="img" aria-label="SpaConcierge product preview">
-        <div class="center-logo">
-          <img src="/spaconcierge_logo_monogram.svg" alt="SpaConcierge monogram logo">
+      <!-- Hero card with chat animation preview -->
+      <div class="mock reveal" role="img" aria-label="SpaConcierge responding and booking preview">
+        <div class="hero-anim" aria-hidden="true">
+          <div class="hero-bubbles">
+            <div class="bubble b1">
+              <span class="avatar">SC</span>
+              <span><strong>Missed call</strong> from <strong>Sarah</strong></span>
+              <span class="time">12:14</span>
+            </div>
+
+            <div class="bubble me b2">
+              <span class="avatar" style="background:linear-gradient(135deg,var(--aqua-dark),#27b3a1)">AI</span>
+              <span>Hi Sarah — we've got you! Want to book a consultation?</span>
+            </div>
+
+            <div class="bubble me b2" style="animation-delay:1.9s">
+              <span class="avatar" style="background:linear-gradient(135deg,var(--aqua-dark),#27b3a1)">AI</span>
+              <span class="typing"><i></i><i></i><i></i></span>
+            </div>
+
+            <div class="bubble book b3">
+              <span class="avatar" style="background:#0aa587">✓</span>
+              <span><strong>Booked:</strong> Tue • 3:00 PM — confirmation sent</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
