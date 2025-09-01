@@ -30,11 +30,13 @@
   <meta name="twitter:description" content="Answers to setup, integrations, after-hours coverage, consent, HIPAA-aware workflows, reporting, and pricing for SpaConcierge.">
   <meta name="twitter:image" content="https://www.getspaconcierge.com/og-image-1200x630.png">
 
-  <!-- Favicons -->
-  <link rel="icon" href="/favicon.ico">
+  <!-- Favicon (SVG only) -->
+  <link rel="icon" href="/spaconcierge_logo_monogram.svg?v=3" type="image/svg+xml">
+  <!-- Safari pinned tab color (optional but nice) -->
+  <link rel="mask-icon" href="/spaconcierge_logo_monogram.svg?v=3" color="#0aa08a">
+  <!-- Touch icon & PWA manifest (keep consistent across pages) -->
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">
-  <link rel="icon" type="image/png" href="/android-chrome-192x192.png" sizes="192x192">
-  <link rel="icon" type="image/png" href="/android-chrome-512x512.png" sizes="512x512">
+  <link rel="manifest" href="/site.webmanifest">
 
   <!-- Perf hints -->
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
@@ -63,6 +65,9 @@
     body{font-family:'Inter',system-ui,Segoe UI,Roboto,Arial,sans-serif;color:var(--charcoal);line-height:1.6;background:#fff}
     a{color:inherit;text-decoration:none}
     .container{max-width:var(--max);margin:0 auto;padding:0 22px}
+
+    /* Remove the skip link entirely */
+    .skip { display: none !important; }
 
     /* Header / Nav */
     header{position:sticky;top:0;z-index:50;backdrop-filter:saturate(140%) blur(10px);background:rgba(255,255,255,.82);border-bottom:1px solid var(--line);transition:box-shadow .25s ease}
