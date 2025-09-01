@@ -234,46 +234,62 @@
       .fields{grid-template-columns:1fr}
     }
 
-    /* --- Hero chat demo --- */
-    .mock{min-height:560px}            /* makes the right card feel substantial */
-    .chat-stage{width:100%;height:100%;display:flex;align-items:center;justify-content:center}
-    .chat-card{
-      width:86%;max-width:540px;       /* fixes the "too narrow" look */
-      background:linear-gradient(180deg,#f4fffb,#ffffff);
-      border:1px solid var(--line);
-      border-radius:20px;
-      padding:18px;
-      box-shadow:var(--glow-strong);
-      overflow:hidden;
+    /* ===== Premium motion for hero chat ===== */
+    :root{
+      --msg-ease: cubic-bezier(.22,.65,.20,1);
+      --msg-dur: 520ms;
     }
 
-    /* message bubbles */
-    .bubble{background:#ecfcf6;border:1px solid #e2f5ef;border-radius:16px;padding:14px 16px;box-shadow:var(--glow)}
-    .bubble-row{display:flex;align-items:center;gap:12px}
-    .bubble.event{background:#fff;border-color:#e8eef2}
-    .bubble.ai-msg{background:#eafffa}
-    .bubble.confirm{background:#fff}
-    .bubble .title{font-weight:700;color:#1f2937}
-    .bubble .time{margin-left:auto;color:#6b7280;font-weight:600}
+    /* keep the card substantial on all screens */
+    .mock{ min-height:560px }
+    .chat-stage{ width:100%; height:100%; display:flex; align-items:center; justify-content:center }
+    .chat-card{
+      width:86%; max-width:540px; background:linear-gradient(180deg,#f4fffb,#ffffff);
+      border:1px solid var(--line); border-radius:20px; padding:18px;
+      box-shadow:var(--glow-strong); overflow:hidden;
+    }
+
+    /* bubbles get subtle lift on hover and pop-in on mount */
+    .bubble{
+      background:#ecfcf6; border:1px solid #e2f5ef; border-radius:16px; padding:14px 16px; box-shadow:var(--glow);
+      transition: box-shadow 400ms var(--msg-ease), transform 400ms var(--msg-ease);
+      will-change: transform, filter;
+    }
+    .bubble:hover{ transform:translateY(-1px); box-shadow:0 12px 30px rgba(0,0,0,.08) }
+    .bubble-row{ display:flex; align-items:center; gap:12px }
+    .bubble.event{ background:#fff; border-color:#e8eef2 }
+    .bubble.ai-msg{ background:#eafffa }
+    .bubble.confirm{ background:#fff }
+    .bubble .title{ font-weight:700; color:#1f2937 }
+    .bubble .time{ margin-left:auto; color:#6b7280; font-weight:600 }
 
     /* avatars */
-    .avatar{width:36px;height:36px;border-radius:999px;display:grid;place-items:center;flex:0 0 36px}
-    .avatar.ai{background:linear-gradient(180deg,#17b79e,#0da58e);color:#fff;font-weight:800;letter-spacing:.5px}
-    .avatar svg{display:block;width:100%;height:100%}
+    .avatar{ width:36px; height:36px; border-radius:999px; display:grid; place-items:center; flex:0 0 36px }
+    .avatar.ai{ background:linear-gradient(180deg,#17b79e,#0da58e); color:#fff; font-weight:800; letter-spacing:.5px }
+    .avatar svg{ display:block; width:100%; height:100% }
 
-    /* typing dots */
-    .typing .dot{width:8px;height:8px;border-radius:50%;background:#9ad8cc;animation:blink 1.3s infinite both}
-    .typing .dot:nth-child(2){animation-delay:.15s}
-    .typing .dot:nth-child(3){animation-delay:.3s}
-    @keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
+    .reveal-msg{ animation: rise var(--msg-dur) var(--msg-ease) both }
+    @keyframes rise{
+      0%{ opacity:0; transform:translateY(10px) scale(.985); filter:blur(6px) }
+      100%{ opacity:1; transform:none; filter:blur(0) }
+    }
 
-    /* subtle entrance */
-    .fade-in{animation:fade .4s ease-out both}
-    @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+    /* typing dots with a gentle wave instead of blink */
+    .typing .dot{
+      width:8px; height:8px; border-radius:50%; background:#8fd6c9;
+      transform-origin:center; animation: wave 1200ms ease-in-out infinite both;
+      opacity:.35;
+    }
+    .typing .dot:nth-child(2){ animation-delay:.12s }
+    .typing .dot:nth-child(3){ animation-delay:.24s }
+    @keyframes wave{
+      0%,80%,100%{ transform:translateY(0); opacity:.35 }
+      40%{ transform:translateY(-3px); opacity:1 }
+    }
 
     @media(max-width:900px){
-      .chat-card{width:100%;max-width:none}
-      .mock{min-height:460px}
+      .chat-card{ width:100%; max-width:none }
+      .mock{ min-height:460px }
     }
   </style>
 
@@ -599,120 +615,112 @@
     }, STAGGER);
   })();
 
-  /* ---------- Hero chat animation (sequential scenarios, no empty gaps) ---------- */
+  /* ---------- Hero chat animation (smooth, staggered, premium) ---------- */
   (function(){
     const chat = document.getElementById('hero-chat');
     if(!chat) return;
 
-    // tasteful "emoji-style" vector phone avatar (no raster emoji)
+    // small helpers
+    const sleep = ms => new Promise(r=>setTimeout(r,ms));
+    const mk = (t,c) => { const el = document.createElement(t); if(c) el.className = c; return el; };
+
+    // tasteful emoji-style phone avatar (vector)
     const phoneSVG = () => `
       <svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <defs>
-          <linearGradient id="phg" x1="0" y1="0" x2="1" y2="1">
-            <stop stop-color="#12c2b0"/><stop offset="1" stop-color="#0aa08a"/>
-          </linearGradient>
-        </defs>
+        <defs><linearGradient id="phg" x1="0" y1="0" x2="1" y2="1">
+          <stop stop-color="#12c2b0"/><stop offset="1" stop-color="#0aa08a"/></linearGradient></defs>
         <circle cx="24" cy="24" r="24" fill="url(#phg)"/>
         <path fill="#fff" d="M31.9 34.6c-.6 0-1.2-.1-1.8-.4l-2.9-1.3c-3.5-1.5-6.7-4.7-8.2-8.2l-1.3-2.9c-.5-1.1-.5-2.4.1-3.4l1.7-2.7c.5-.8 1.5-1.1 2.3-.7l3.3 1.6c.8.4 1.2 1.3 1 2.1l-.5 2.1c-.1.4 0 .8.3 1.1l3.5 3.5c.3.3.7.4 1.1.3l2.1-.5c.8-.2 1.7.2 2.1 1l1.6 3.3c.4.8.2 1.8-.7 2.3l-2.7 1.7c-.5.3-1 .4-1.5.4z"/>
       </svg>`;
-
     const checkSVG = () => `
       <svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
         <circle cx="24" cy="24" r="24" fill="#14b8a6"/>
         <path fill="#fff" d="M20.3 31.2 12.8 23.7l2.3-2.3 5.2 5.2 12-12 2.3 2.3z"/>
       </svg>`;
 
-    const mk = (tag, cls) => { const el = document.createElement(tag); if(cls) el.className = cls; return el; };
-
     function avatarPhone(){ const a = mk('div','avatar'); a.innerHTML = phoneSVG(); return a; }
     function avatarAI(){ const a = mk('div','avatar ai'); a.textContent = 'AI'; return a; }
     function avatarCheck(){ const a = mk('div','avatar'); a.innerHTML = checkSVG(); return a; }
 
-    function addEventMessage(s){
-      const bubble = mk('div','bubble event fade-in');
+    function eventBubble(s){
+      const b = mk('div','bubble event reveal-msg');
       const row = mk('div','bubble-row');
       row.appendChild(avatarPhone());
       const title = mk('div','title'); title.textContent = `Missed call from ${s.from}`;
       const time  = mk('div','time');  time.textContent  = s.time;
       row.appendChild(title); row.appendChild(time);
-      bubble.appendChild(row);
-      chat.appendChild(bubble);
+      b.appendChild(row);
+      return b;
     }
-
-    function addAiMessage(text){
-      const bubble = mk('div','bubble ai-msg fade-in');
+    function aiBubble(text){
+      const b = mk('div','bubble ai-msg reveal-msg');
       const row = mk('div','bubble-row');
       row.appendChild(avatarAI());
       const p = mk('div'); p.textContent = text;
       row.appendChild(p);
-      bubble.appendChild(row);
-      chat.appendChild(bubble);
+      b.appendChild(row);
+      return b;
     }
-
-    function addTyping(){
-      const bubble = mk('div','bubble ai-msg typing fade-in');
+    function typingBubble(){
+      const b = mk('div','bubble ai-msg typing reveal-msg');
       const row = mk('div','bubble-row');
       row.appendChild(avatarAI());
-      const dots = mk('div'); dots.style.display = 'flex'; dots.style.gap = '6px';
-      for(let i=0;i<3;i++){ dots.appendChild(mk('div','dot')); }
+      const dots = mk('div'); dots.style.display='flex'; dots.style.gap='6px';
+      for(let i=0;i<3;i++) dots.appendChild(mk('div','dot'));
       row.appendChild(dots);
-      bubble.appendChild(row);
-      chat.appendChild(bubble);
-      return bubble;  // so we can remove it later
+      b.appendChild(row);
+      return b;
     }
-
-    function addConfirm(text){
-      const bubble = mk('div','bubble confirm fade-in');
+    function confirmBubble(text){
+      const b = mk('div','bubble confirm reveal-msg');
       const row = mk('div','bubble-row');
       row.appendChild(avatarCheck());
       const p = mk('div'); p.innerHTML = `<b>Booked:</b> ${text}`;
       row.appendChild(p);
-      bubble.appendChild(row);
-      chat.appendChild(bubble);
+      b.appendChild(row);
+      return b;
     }
 
-    // 3 rotating scenarios; adjust copy freely
     const scenarios = [
-      {
-        from:'Priya', time:'18:17',
+      { from:'Priya',  time:'18:17',
         ai:"Hi Priya — can do a hydrafacial tomorrow. Want 4 PM?",
-        confirm:"Fri • 4:00 PM — calendar invite sent"
-      },
-      {
-        from:'Jordan', time:'09:05',
+        confirm:"Fri • 4:00 PM — calendar invite sent" },
+      { from:'Jordan', time:'09:05',
         ai:"Hi Jordan — we can fit you for a chemical peel today. Want 2 PM?",
-        confirm:"Today • 2:00 PM — calendar invite sent"
-      },
-      {
-        from:'Ava', time:'19:42',
+        confirm:"Today • 2:00 PM — calendar invite sent" },
+      { from:'Ava',    time:'19:42',
         ai:"Hi Ava — Botox consult available tomorrow. Want 11 AM?",
-        confirm:"Tomorrow • 11:00 AM — calendar invite sent"
-      }
+        confirm:"Tomorrow • 11:00 AM — calendar invite sent" }
     ];
 
-    // Play one scenario at a time; messages appear sequentially.
-    // There's a ~2s pause before the next scenario, but the card never goes blank.
-    let idx = 0;
-    function runScenario(){
-      const s = scenarios[idx % scenarios.length];
-      // replace content, but immediately add the first bubble so there's no empty state
-      chat.innerHTML = '';
-      addEventMessage(s);                          // t=0
-      setTimeout(()=> addAiMessage(s.ai), 1200);   // t=1.2s
-      setTimeout(()=>{
-        const typing = addTyping();                // t=2.3s
-        setTimeout(()=>{
-          typing.remove();                         // t=3.9s
-          addConfirm(s.confirm);
-        }, 1600);
-      }, 2300);
+    // compute a natural typing time from message length (1.2–2.2s)
+    const typeMsFor = text => Math.max(1200, Math.min(2200, 26 * text.length));
 
-      idx++;
-      // total ≈ 3.9s; start the next one 2.1s later → ≈6s per cycle
-      setTimeout(runScenario, 6000);
+    async function playScenario(s){
+      // never show an empty stage: add first bubble immediately
+      chat.innerHTML = '';
+      chat.appendChild(eventBubble(s));                 // t=0
+      await sleep(650);
+
+      chat.appendChild(aiBubble(s.ai));                 // AI reply
+      await sleep(350);
+
+      const typing = typingBubble();                    // typing…
+      chat.appendChild(typing);
+      await sleep(typeMsFor(s.ai));
+      typing.remove();
+
+      chat.appendChild(confirmBubble(s.confirm));       // confirmation
+      await sleep(1600);                                // settle briefly before next scenario
     }
 
-    runScenario();
+    (async function loop(){
+      let i = 0;
+      while(true){
+        await playScenario(scenarios[i % scenarios.length]);
+        i++;
+      }
+    })();
   })();
 </script>
 </body>
