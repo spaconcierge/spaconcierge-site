@@ -185,15 +185,6 @@
     .stat{background:#ffffff;border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:var(--glow)}
     .stat b{display:block;font-size:26px;font-family:'Montserrat',sans-serif}
 
-    /* FAQ (polished) */
-    .faq-list{display:grid;gap:12px}
-    .faq-item{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff}
-    .faq-q{cursor:pointer;padding:16px 18px;font-weight:700;display:flex;justify-content:space-between;align-items:center}
-    .faq-q span{display:inline-block;transition:transform .25s ease;color:#94a3b8;font-weight:800}
-    .faq-a{max-height:0;overflow:hidden;transition:max-height .35s ease, padding .35s ease;color:var(--muted);padding:0 18px 0 18px}
-    .faq-item.active .faq-a{padding:0 18px 16px 18px}
-    .faq-item.active .faq-q span{transform:rotate(45deg)} /* + to × */
-
     /* Contact form */
     .contact{background:linear-gradient(180deg,#f7fffe,#ffffff)}
     form.contact-form{background:#fff;border:1px solid var(--line);border-radius:18px;padding:24px;box-shadow:var(--glow)}
@@ -480,27 +471,6 @@
     </div>
   </section>
 
-  <!-- FAQ -->
-  <section>
-    <div class="container">
-      <div class="section-title">Frequently Asked Questions</div>
-      <div class="faq-list">
-        <div class="faq-item reveal">
-          <div class="faq-q" role="button" aria-expanded="false">Do we need to change our phone number? <span aria-hidden="true">+</span></div>
-          <div class="faq-a" aria-hidden="true">No — you keep your current number. We just add forwarding for missed calls.</div>
-        </div>
-        <div class="faq-item reveal">
-          <div class="faq-q" role="button" aria-expanded="false">Is this HIPAA compliant? <span aria-hidden="true">+</span></div>
-          <div class="faq-a" aria-hidden="true">We use HIPAA-aware workflows and secure storage practices. (We don’t claim certification.)</div>
-        </div>
-        <div class="faq-item reveal">
-          <div class="faq-q" role="button" aria-expanded="false">How fast can we start? <span aria-hidden="true">+</span></div>
-          <div class="faq-a" aria-hidden="true">Most spas are live within a day.</div>
-        </div>
-      </div>
-    </div>
-  </section>
-
   <!-- CONTACT -->
   <section id="contact" class="contact">
     <div class="container">
@@ -592,20 +562,6 @@
     entries.forEach(e=>{ if(e.isIntersecting){ e.target.classList.add('show'); io.unobserve(e.target); } })
   },{threshold:.1});
   revealEls.forEach(el=>io.observe(el));
-
-  // FAQ accordion (with smooth height + ARIA updates)
-  document.querySelectorAll('.faq-item').forEach(item=>{
-    const q = item.querySelector('.faq-q');
-    const a = item.querySelector('.faq-a');
-    q.addEventListener('click', ()=>{
-      const isOpen = item.classList.toggle('active');
-      q.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-      a.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
-      a.style.maxHeight = isOpen ? (a.scrollHeight + 'px') : '0px';
-    });
-    // ensure collapsed state has zero height
-    a.style.maxHeight = '0px';
-  });
 
   // Year
   document.getElementById('y').textContent = new Date().getFullYear();
