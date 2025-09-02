@@ -23,7 +23,7 @@ export const handler = async (event) => {
   const twiml = `
     <?xml version="1.0" encoding="UTF-8"?>
     <Response>
-      <Say voice="Polly.Matthew">Thanks for calling, Tristan. Hope you're having a great day or kys</Say>
+      <Say voice="Polly.Matthew">Thanks for calling, Tristan. Hope you're having a great day LOL</Say>
       <Hangup/>
     </Response>`.trim();
 
