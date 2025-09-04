@@ -1,0 +1,18 @@
+Purpose: we collect explicit consent by voice or keypad during inbound calls to participating spas.
+
+IVR Script (exact words the caller hears):
+“Thanks for calling. We can text you booking help and appointment updates.
+To receive texts, press 1 or say “Yes.”
+To decline, press 2 or say “No.””
+You may receive up to 3 messages per appointment. Message & data rates may apply.
+You can get help by replying HELP, or opt out anytime by replying STOP.
+Consent is not a condition of purchase.
+Our Terms are at https://getspaconcierge.com/smsterms and Privacy Policy is at https://getspaconcierge.com/smsprivacy.
+
+What happens after consent:
+If the caller says “Yes” or presses 1, we send a confirmation text that repeats how to get help (HELP) and how to opt-out (STOP).
+
+What happens if the caller declines or does not respond:
+We do not send any SMS.
+
+Contact: matt@getspaconcierge.com
