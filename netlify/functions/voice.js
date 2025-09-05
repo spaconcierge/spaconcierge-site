@@ -14,7 +14,7 @@ const MSG_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || "";
 const FALLBACK_FROM = process.env.TWILIO_NUMBER || "";
 
 // Reuse this everywhere so all prompts use Polly.Joanna
-const VOICE_OPTS = { voice: "Polly.Joanna", language: "en-US" };
+const VOICE_OPTS = { voice: "Polly.Matthew", language: "en-US" };
 
 exports.handler = async (event) => {
   const VoiceResponse = twilio.twiml.VoiceResponse;
