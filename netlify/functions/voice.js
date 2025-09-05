@@ -2,9 +2,17 @@
 const qs = require("querystring");
 const twilio = require("twilio");
 
-// Optional: only needed if you want to send the confirmation SMS right now.
-// Make sure these env vars exist in Netlify.
-// const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+const {
+  TWILIO_ACCOUNT_SID,
+  TWILIO_AUTH_TOKEN,
+  TWILIO_NUMBER,
+  APP_ENV, // optional (e.g., "production")
+} = process.env;
+
+const client =
+  TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN
+    ? twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+    : null;
 
 exports.handler = async (event) => {
   const VoiceResponse = twilio.twiml.VoiceResponse;
@@ -15,32 +23,34 @@ exports.handler = async (event) => {
     const params =
       event.httpMethod === "POST"
         ? qs.parse(event.body || "")
-        : (event.queryStringParameters || {});
-    const digits = (params.Digits || "").trim();
-    const speech = (params.SpeechResult || "").toLowerCase();
-    const from = params.From;
-    const to = params.To;
+        : event.queryStringParameters || {};
 
-    // Helper: restart gather (same function as action)
-    const gatherPrompt = () => {
+    const digits = (params.Digits || "").trim();
+    const speech = (params.SpeechResult || "").trim().toLowerCase();
+    const from = params.From; // caller
+    const to = params.To; // your Twilio number
+
+    // Helper to (re)prompt user
+    const prompt = (prelude) => {
+      if (prelude) twiml.say(prelude);
       const gather = twiml.gather({
         input: "speech dtmf",
         numDigits: 1,
         action: "/.netlify/functions/voice",
         method: "POST",
-        timeout: 5,
+        timeout: 6,
       });
       gather.say(
         "Thanks for calling. We can text you booking help and appointment updates. " +
           "To receive texts, press 1 or say Yes. To decline, press 2 or say No."
       );
-      // Fallback if no input
+      // If no input, end politely (TwiML continues after <Gather> timeout)
       twiml.say("We did not receive any input. Goodbye.");
     };
 
-    // First-time hit (no digits yet) => prompt
+    // First entry (no input yet)
     if (!digits && !speech) {
-      gatherPrompt();
+      prompt();
       return {
         statusCode: 200,
         headers: { "Content-Type": "text/xml" },
@@ -48,20 +58,49 @@ exports.handler = async (event) => {
       };
     }
 
-    const saidYes = ["yes", "yeah", "yep", "affirmative"].includes(speech);
-    const saidNo = ["no", "nope", "negative"].includes(speech);
+    // Normalize speech into yes/no buckets
+    const yesWords = new Set(["yes", "yeah", "yep", "affirmative", "yup", "correct"]);
+    const noWords = new Set(["no", "nope", "negative", "nah"]);
+
+    const saidYes = yesWords.has(speech);
+    const saidNo = noWords.has(speech);
 
     if (digits === "1" || saidYes) {
-      // ===== CONFIRMATION SMS (optional now; add once env vars are set) =====
-      // await client.messages.create({
-      //   to: from,
-      //   from: to, // or your configured sending number
-      //   body:
-      //     "You’re opted in to appointment updates (1–3 msgs per visit). Msg&Data rates may apply. " +
-      //     "For help reply HELP; to opt out reply STOP.",
-      // });
+      // Build confirmation SMS body
+      const smsBody =
+        "You’re opted in to appointment updates (1–3 msgs per visit). " +
+        "Msg&Data rates may apply. For help reply HELP; to opt out reply STOP.";
 
-      twiml.say("Thanks! You’re opted in. We’ll text you shortly. Goodbye.");
+      let sendError = null;
+
+      // Only send if we have credentials and we want to actually deliver in this environment
+      if (client && (APP_ENV ? APP_ENV === "production" : true)) {
+        try {
+          const msg = await client.messages.create({
+            to: from,
+            from: TWILIO_NUMBER || to, // prefer explicit env; fallback to called number
+            body: smsBody,
+          });
+          console.log("Opt-in SMS sent:", msg.sid);
+        } catch (err) {
+          sendError = err;
+          console.error("Error sending opt-in SMS:", err.code, err.message);
+        }
+      } else {
+        console.log("Skipping SMS send (no client or not production):", { from, to });
+      }
+
+      if (sendError && sendError.code === 21610) {
+        // User previously replied STOP to this sender
+        twiml.say(
+          "It looks like texting is blocked for this number. " +
+            "If you want to receive texts again, please send START to our number and call back."
+        );
+      } else if (sendError) {
+        twiml.say("We had trouble sending the text. Please try again later.");
+      } else {
+        twiml.say("Thanks! You’re opted in. We’ll text you shortly. Goodbye.");
+      }
       twiml.hangup();
 
     } else if (digits === "2" || saidNo) {
@@ -69,16 +108,8 @@ exports.handler = async (event) => {
       twiml.hangup();
 
     } else {
-      // Unrecognized input → reprompt
-      const g = twiml.gather({
-        input: "speech dtmf",
-        numDigits: 1,
-        action: "/.netlify/functions/voice",
-        method: "POST",
-        timeout: 5,
-      });
-      g.say("Sorry, I didn’t catch that. Press 1 for yes, or 2 for no.");
-      twiml.say("Goodbye.");
+      // Unrecognized — reprompt once
+      prompt("Sorry, I didn’t catch that.");
     }
 
     return {
@@ -87,8 +118,9 @@ exports.handler = async (event) => {
       body: twiml.toString(),
     };
   } catch (err) {
-    // Never let the function crash the call; always return TwiML.
     console.error("voice.js error:", err);
+    const VoiceResponse = twilio.twiml.VoiceResponse;
+    const twiml = new VoiceResponse();
     twiml.say("Sorry, something went wrong. Goodbye.");
     return {
       statusCode: 200,
