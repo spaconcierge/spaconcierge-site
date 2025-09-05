@@ -1,26 +1,47 @@
-// Simple, premium-feel SMS assistant (LLM is a later upgrade)
-function escapeXml(str=""){return str.replace(/[<>&'"]/g,s=>({"<":"&lt;",">":"&gt;","&":"&amp;","'":"&apos;",'"':"&quot;"}[s]));}
+// sms.js
+const { appendRow } = require('./_sheets');
+const { spaForNumber } = require('./_spa');
+const twilio = require('twilio');
 
-const REPLIES = [
-  { test: /(book|appt|appointment|schedule)/i,
-    reply: () => `Fastest way to book is here: ${process.env.CALENDLY_LINK}\nIf you’d like, tell me a day/time and I’ll hold a slot.` },
-  { test: /(price|cost|how much)/i,
-    reply: () => `Typical treatments start around $150–$300 depending on service. Happy to confirm for you—what are you looking for?` },
-  { test: /(hours?|open)/i,
-    reply: () => `We’re open Mon–Fri 9–6 and Sat 10–4. What day works for you?` },
-  { test: /(address|where|location)/i,
-    reply: () => `We’re at 123 Main St, Suite 200. Parking in the rear. Need directions?` },
-];
+exports.handler = async (event) => {
+  const params = new URLSearchParams(event.body || '');
+  const from = params.get('From') || '';
+  const to = params.get('To') || '';
+  const body = (params.get('Body') || '').trim();
+  const spaName = spaForNumber(to);
+  const now = new Date().toISOString();
 
-export const handler = async (event) => {
-  const p = new URLSearchParams(event.body || "");
-  const body = (p.get("Body") || "").trim();
+  // Log inbound SMS
+  await appendRow({
+    sheetId: process.env.SHEET_ID,
+    tabName: spaName,
+    row: [now, '-', to, from, 'sms', 'inbound', body, 'N/A', '']
+  });
 
-  let reply = `I can help you book right now: ${process.env.CALENDLY_LINK}`;
+  // Very simple router (you can drop in your existing logic here)
+  let reply =
+    'Thanks! We’ll get you scheduled. Reply C to confirm, ' +
+    'RESCHEDULE to move, HELP for help or STOP to opt out. ' +
+    'Msg&Data rates may apply.';
 
-  for (const r of REPLIES) if (r.test.test(body)) { reply = r.reply(); break; }
+  // Example: confirm keyword “C”
+  if (/^c$/i.test(body)) {
+    reply = 'Confirmed ✅ See you soon! Reply HELP for help or STOP to opt out.';
+  }
 
-  // Return TwiML so Twilio replies via SMS
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`;
-  return { statusCode: 200, headers: { "Content-Type": "text/xml" }, body: twiml };
+  const twiml = new twilio.twiml.MessagingResponse();
+  twiml.message(reply);
+
+  // Log outbound SMS
+  await appendRow({
+    sheetId: process.env.SHEET_ID,
+    tabName: spaName,
+    row: [now, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', '']
+  });
+
+  return {
+    statusCode: 200,
+    headers: {'Content-Type': 'application/xml'},
+    body: twiml.toString()
+  };
 };
