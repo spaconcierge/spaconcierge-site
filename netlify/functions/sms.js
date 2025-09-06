@@ -96,40 +96,65 @@ const dateRe  = /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/;
 const monthRe = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?\b/i;
 const relRe   = /\b(?:today|tomorrow|tmrw|this (?:mon|tue|wed|thu|fri|sat|sun|weekend))\b/i;
 const namePhraseRe  = /\b(?:my name(?:'s)? is|name is|i am|i'm|im|this is|call me|it's)\s+([A-Z][a-z' -]{1,29})\b/;
-function whenPhrase(text) {
+// --- date/time helpers (replace whenPhrase with these) ---
+function firstMatchWithIndex(text, regexes) {
   const t = String(text || '');
-  const m   = (monthRe.exec(t) || [])[0];
-  const d   = (dateRe.exec(t)  || [])[0];
-  const day = (dayRe.exec(t)   || [])[0];
-  const rel = (relRe.exec(t)   || [])[0];
-  const tm  = (timeRe.exec(t)  || [])[0];
+  let best = null; // {val, idx}
+  for (const re of regexes) {
+    const m = re.exec(t);
+    if (m && m.index >= 0) {
+      const val = m[0];
+      if (best === null || m.index < best.idx) best = { val, idx: m.index };
+    }
+  }
+  return best ? best.val : '';
+}
 
-  // Combine if both parts exist
-  if ((m || d || day || rel) && tm) return `${m || d || day || rel} ${tm}`;
+function extractDatePart(text) {
+  // month name date (e.g. "Sep 12"), numeric date (e.g. "9/12"), weekday ("Friday"),
+  // relative ("tomorrow", "this Tue", "weekend")
+  return firstMatchWithIndex(text, [monthRe, dateRe, dayRe, relRe]);
+}
 
-  // Return whichever exists
-  return m || d || day || rel || tm || '';
+function extractTimePart(text) {
+  // 4pm, 10:30 AM, 14:00, etc.
+  return firstMatchWithIndex(text, [timeRe]);
+}
+
+function combineWhen(datePart, timePart) {
+  if (datePart && timePart) return `${datePart} ${timePart}`.trim();
+  return (datePart || timePart || '').trim();
 }
 
 function nameFrom(text, idx) {
   const t = String(text || '').trim();
 
-  // Explicit phrases ("my name is", "call me", etc.)
+  // Explicit phrases ("my name is", "call me", "it's", etc.)
   const m1 = namePhraseRe.exec(t);
   if (m1) return titleCase(m1[1]);
 
-  // Look for any single capitalized word not in services/days/months
-  const capitalWord = /\b([A-Z][a-z]{1,29})\b/.exec(t);
-  if (capitalWord) {
-    const candidate = capitalWord[1].toLowerCase();
+  // Any single capitalized word not obviously a service/day/month
+  const cap = /\b([A-Z][a-z]{1,29})\b/.exec(t);
+  if (cap) {
+    const candidate = cap[1].toLowerCase();
     if (
       !idx.variants.some(w => candidate.includes(w)) &&
-      !dayRe.test(candidate) &&
-      !monthRe.test(candidate)
+      !/\b(mon|tue|wed|thu|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(candidate) &&
+      !/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\b/i.test(candidate)
     ) {
-      return titleCase(capitalWord[1]);
+      return titleCase(cap[1]);
     }
   }
+
+  // Fallback: first token that isn't a service word
+  const m2 = /^([a-z][a-z' -]{1,29})(?:,|\s|$)/i.exec(t);
+  if (m2) {
+    const candidate = m2[1].toLowerCase();
+    if (!idx.variants.some(w => candidate.includes(w))) return titleCase(m2[1]);
+  }
+
+  return '';
+}
 
   // Fallback: bare first token
   const m2 = /^([a-z][a-z' -]{1,29})(?:,|\s|$)/i.exec(t);
@@ -142,25 +167,34 @@ function nameFrom(text, idx) {
 }
 
 function extractSlotsFromMessages(history, currentUserMsg, idx) {
-  const slots = { service: '', when: '', name: '' };
+  const slots = { service: '', when: '', whenDate: '', whenTime: '', name: '' };
+
+  function apply(text) {
+    if (!text) return;
+    if (!slots.service) slots.service = pickService(text, idx);
+    if (!slots.name)    slots.name    = nameFrom(text, idx);
+
+    const d = extractDatePart(text);
+    const t = extractTimePart(text);
+    if (!slots.whenDate && d) slots.whenDate = d;
+    if (!slots.whenTime && t) slots.whenTime = t;
+  }
+
+  // prefer user turns in chronological order
   for (const m of history) {
-    if (m.role !== 'user') continue;
-    if (!slots.service) slots.service = pickService(m.content, idx);
-    if (!slots.when)    slots.when    = whenPhrase(m.content);
-    if (!slots.name)    slots.name    = nameFrom(m.content, idx);
+    if (m.role === 'user') apply(m.content);
   }
-  if (currentUserMsg) {
-    if (!slots.service) slots.service = pickService(currentUserMsg, idx);
-    if (!slots.when)    slots.when    = whenPhrase(currentUserMsg);
-    if (!slots.name)    slots.name    = nameFrom(currentUserMsg, idx);
-  }
+  if (currentUserMsg) apply(currentUserMsg);
+
+  slots.when = combineWhen(slots.whenDate, slots.whenTime);
   return slots;
 }
 function missingFields(slots) {
   const miss = [];
-  if (!slots.service) miss.push('service');
-  if (!slots.when)    miss.push('date/time');
-  if (!slots.name)    miss.push('name');
+  if (!slots.service)  miss.push('service');
+  if (!slots.whenDate) miss.push('date');
+  if (!slots.whenTime) miss.push('time');
+  if (!slots.name)     miss.push('name');
   return miss;
 }
 
@@ -380,7 +414,7 @@ exports.handler = async (event) => {
     const missing = missingFields(slots);
     const serviceLine = services.map(s => s.price ? `${s.key} (~$${s.price})` : s.key).join(', ');
 
-    const systemPrompt =
+   const systemPrompt =
 `You are a helpful receptionist for ${spaDisplayName}.
 Tone: friendly, concise, professional.
 You DO NOT have live calendar access; never promise confirmed availability.
@@ -390,13 +424,14 @@ Services: ${serviceLine || 'standard services'}.
 
 Known so far:
 - Service: ${slots.service || '—'}
-- When: ${slots.when || '—'}
+- Date: ${slots.whenDate || '—'}
+- Time: ${slots.whenTime || '—'}
 - Name: ${slots.name || '—'}
 Missing: ${missing.length ? missing.join(', ') : 'none'}
 
 Behavior:
-- If any field is missing, ask ONLY for the missing field(s) (one compact question).
-- If all fields are present, acknowledge and say you'll hold the request and someone will confirm shortly (no fake confirmations).
+- If any piece is missing, ask ONLY for the missing piece(s) (one compact question).
+- If all pieces are present, acknowledge and say you'll hold the request and someone will confirm shortly (no fake confirmations).
 - Keep replies to 1–3 SMS-length sentences.`;
 
     try {
