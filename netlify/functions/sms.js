@@ -156,16 +156,6 @@ function nameFrom(text, idx) {
   return '';
 }
 
-  // Fallback: bare first token
-  const m2 = /^([a-z][a-z' -]{1,29})(?:,|\s|$)/i.exec(t);
-  if (m2) {
-    const candidate = m2[1].toLowerCase();
-    if (!idx.variants.some(w => candidate.includes(w))) return titleCase(candidate);
-  }
-
-  return '';
-}
-
 function extractSlotsFromMessages(history, currentUserMsg, idx) {
   const slots = { service: '', when: '', whenDate: '', whenTime: '', name: '' };
 
