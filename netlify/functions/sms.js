@@ -1,4 +1,5 @@
 // sms.js
+console.log("SHEETS_CONFIG_ID is", process.env.SHEETS_CONFIG_ID);
 const { appendRow } = require('./_sheets');
 const { spaForNumber } = require('./_spa');                 // legacy display name for sheet rows
 const { getConfigs } = require('./_lib/config');            // ← use your existing config.ts
