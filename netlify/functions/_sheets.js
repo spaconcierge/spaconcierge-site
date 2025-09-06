@@ -1,49 +1,44 @@
-// netlify/functions/_sheets.js
+/// _sheets.js (SAFE PATCH for split creds)
 const { google } = require('googleapis');
 
-function parseJsonBlob(raw) {
-  try {
-    const txt = String(raw || '').trim();
-    const json = txt.startsWith('{') ? JSON.parse(txt) : JSON.parse(Buffer.from(txt, 'base64').toString('utf8'));
-    if (json && json.client_email && json.private_key) {
-      return { client_email: json.client_email, private_key: json.private_key };
-    }
-  } catch {}
-  return null;
-}
+function buildAuth() {
+  const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
+  const privateKey  = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
 
-function getServiceAccount() {
-  // Preferred split vars
-  let email = process.env.GOOGLE_CLIENT_EMAIL || '';
-  let key = process.env.GOOGLE_PRIVATE_KEY || '';
-  if (key) key = key.replace(/\\n/g, '\n');
+  if (clientEmail && privateKey) {
+    return new google.auth.JWT(
+      clientEmail,
+      null,
+      privateKey,
+      ['https://www.googleapis.com/auth/spreadsheets']
+    );
+  }
 
-  if (email && key) return { client_email: email, private_key: key };
+  // fallback to legacy big JSON
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (!raw) throw new Error('No Google creds: set GOOGLE_CLIENT_EMAIL/GOOGLE_PRIVATE_KEY or GOOGLE_SERVICE_ACCOUNT_JSON');
 
-  // Fallback JSON blob
-  const blob = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '';
-  const parsed = parseJsonBlob(blob);
-  if (parsed) return parsed;
+  const creds = raw.trim().startsWith('{')
+    ? JSON.parse(raw)
+    : JSON.parse(Buffer.from(raw, 'base64').toString('utf8'));
 
-  throw new Error('Google SA credentials missing (need GOOGLE_CLIENT_EMAIL+GOOGLE_PRIVATE_KEY or GOOGLE_SERVICE_ACCOUNT_JSON).');
+  return new google.auth.JWT(
+    creds.client_email,
+    null,
+    creds.private_key,
+    ['https://www.googleapis.com/auth/spreadsheets']
+  );
 }
 
 async function getSheets() {
-  const sa = getServiceAccount();
-  const auth = new google.auth.JWT(
-    sa.client_email,
-    null,
-    sa.private_key,
-    ['https://www.googleapis.com/auth/spreadsheets']
-  );
-  // googleapis will authorize lazily; no need to await auth.authorize()
+  const auth = buildAuth();
+  await auth.authorize();
   return google.sheets({ version: 'v4', auth });
 }
 
-// Ensure tab exists
 async function ensureSheet({ sheets, spreadsheetId, tabName }) {
   try {
-    await sheets.spreadsheets.values.get({ spreadsheetId, range: `${tabName}!A:A` });
+    await sheets.spreadsheets.get({ spreadsheetId, ranges: [tabName] });
   } catch {
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
@@ -56,10 +51,8 @@ async function ensureSheet({ sheets, spreadsheetId, tabName }) {
 async function appendRow({ sheetId, tabName, row }) {
   const spreadsheetId = sheetId || process.env.SHEET_ID || process.env.GOOGLE_SHEETS_ID;
   if (!spreadsheetId) throw new Error('Missing spreadsheetId (SHEET_ID/GOOGLE_SHEETS_ID)');
-
   const sheets = await getSheets();
   await ensureSheet({ sheets, spreadsheetId, tabName });
-
   await sheets.spreadsheets.values.append({
     spreadsheetId,
     range: `${tabName}!A:Z`,
