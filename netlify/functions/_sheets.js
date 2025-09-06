@@ -1,38 +1,46 @@
-// _sheets.js
-const {google} = require('googleapis');
+// netlify/functions/_sheets.js  (CJS)  — replace file
+const { google } = require('googleapis');
 
 function decodeServiceAccount() {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (!raw) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON missing');
-  try {
-    // allow plain JSON or base64 JSON
-    return raw.trim().startsWith('{')
-      ? JSON.parse(raw)
-      : JSON.parse(Buffer.from(raw, 'base64').toString('utf8'));
-  } catch (e) {
-    throw new Error('Invalid GOOGLE_SERVICE_ACCOUNT_JSON: ' + e.message);
-  }
+  return raw.trim().startsWith('{')
+    ? JSON.parse(raw)
+    : JSON.parse(Buffer.from(raw, 'base64').toString('utf8'));
 }
 
 async function getSheets() {
-  const credentials = decodeServiceAccount();
+  const creds = decodeServiceAccount();
   const auth = new google.auth.JWT(
-    credentials.client_email,
+    creds.client_email,
     null,
-    credentials.private_key,
+    creds.private_key,
     ['https://www.googleapis.com/auth/spreadsheets']
   );
   await auth.authorize();
-  const sheets = google.sheets({version: 'v4', auth});
-  return sheets;
+  return google.sheets({ version: 'v4', auth });
 }
 
-async function appendRow({sheetId, tabName, row}) {
+async function ensureSheet({ sheets, spreadsheetId, tabName }) {
+  try {
+    await sheets.spreadsheets.get({ spreadsheetId, ranges: [tabName] });
+  } catch {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: { requests: [{ addSheet: { properties: { title: tabName } } }] }
+    });
+  }
+}
+
+async function appendRow({ sheetId, tabName, row }) {
+  const spreadsheetId =
+    sheetId || process.env.SHEET_ID || process.env.GOOGLE_SHEETS_ID;
+  if (!spreadsheetId) throw new Error('Missing spreadsheetId (SHEET_ID/GOOGLE_SHEETS_ID)');
   const sheets = await getSheets();
-  const range = `${tabName}!A:Z`;
+  await ensureSheet({ sheets, spreadsheetId, tabName });
   await sheets.spreadsheets.values.append({
-    spreadsheetId: sheetId,
-    range,
+    spreadsheetId,
+    range: `${tabName}!A:Z`,
     valueInputOption: 'USER_ENTERED',
     requestBody: { values: [row] }
   });
