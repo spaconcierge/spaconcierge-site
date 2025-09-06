@@ -7,16 +7,22 @@ let OpenAI = require('openai'); OpenAI = OpenAI.default || OpenAI;
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 8000 });
 
-// --- Config for conversational memory ---
-const HISTORY_LIMIT = Number(process.env.HISTORY_LIMIT || 8);        // messages to include
-const HISTORY_WINDOW_HOURS = Number(process.env.HISTORY_HOURS || 48); // only recent ones
+/* ----------------------------- Configuration ---------------------------- */
+const HISTORY_LIMIT = Number(process.env.HISTORY_LIMIT || 8);         // messages to include
+const HISTORY_WINDOW_HOURS = Number(process.env.HISTORY_HOURS || 48); // recent window
+
+// Services to detect (customize later per spa)
+const SERVICE_WORDS = [
+  'facial','massage','massage standard','standard','wax','laser','brow','brows',
+  'mani','pedicure','peel','microderm','microdermabrasion','facelift'
+];
 
 // Compliance keyword patterns
 const OPT_OUT_KEYWORDS = /^(stop|cancel|end|optout|quit|revoke|stopall|unsubscribe)$/i;
 const OPT_IN_KEYWORDS  = /^(start|unstop|yes)$/i;
 const HELP_KEYWORDS    = /^(help)$/i;
 
-/* ------------------------ Sheets read client (RO) ------------------------ */
+/* ------------------------ Google Sheets (read-only) --------------------- */
 function decodeServiceAccount() {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (!raw) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON missing');
@@ -37,20 +43,21 @@ async function getSheetsClient() {
   return google.sheets({ version: 'v4', auth });
 }
 
-/* ------------- Fetch recent conversation for this spa/number ------------- */
+/* --------------------- Fetch recent conversation turns ------------------ */
+// messages!A:J -> timestamp | spa | '-' | to | from | channel | status | body | error | notes
 async function fetchRecentHistory({ sheetId, spaName, to, from, limit = HISTORY_LIMIT, windowHours = HISTORY_WINDOW_HOURS }) {
   const sheets = await getSheetsClient();
   const resp = await sheets.spreadsheets.values.get({
     spreadsheetId: sheetId,
-    range: 'messages!A:J', // timestamp | spa | '-' | to | from | channel | status | body | error | notes
+    range: 'messages!A:J',
   });
   const rows = resp.data.values || [];
   if (!rows.length) return [];
 
   const nowMs = Date.now();
-  const keep = [];
+  const out = [];
 
-  for (let i = rows.length - 1; i >= 0 && keep.length < limit * 2; i--) {
+  for (let i = rows.length - 1; i >= 0 && out.length < limit * 2; i--) {
     const r = rows[i];
     if (!r || r.length < 8) continue;
 
@@ -68,7 +75,6 @@ async function fetchRecentHistory({ sheetId, spaName, to, from, limit = HISTORY_
     // Skip compliance/system events
     if (/^inbound:(optout|optin|help)/i.test(status)) continue;
 
-    // Respect session window
     const t = Date.parse(ts);
     if (isFinite(t)) {
       const ageHrs = (nowMs - t) / 3600000;
@@ -80,35 +86,84 @@ async function fetchRecentHistory({ sheetId, spaName, to, from, limit = HISTORY_
     else if (/^outbound/i.test(status)) role = 'assistant';
     if (!role) continue;
 
-    keep.push({ role, content: text });
+    out.push({ role, content: text });
   }
 
-  return keep.reverse().slice(-limit);
+  return out.reverse().slice(-limit);
 }
 
-/* ---------------- Small “intent hint” from recent user text -------------- */
-// Extremely lightweight: look backward for the last user message that
-// likely mentions date/time/service and surface it as a hint.
-function extractIntentHint(history) {
-  if (!Array.isArray(history) || !history.length) return '';
+/* ----------------------------- Slot tracking ---------------------------- */
+// Heuristics; calendar integration will replace this.
+const timeRe  = /\b(?:[01]?\d|2[0-3])(?::\d{2})?\s?(?:am|pm)\b/i;
+const dayRe   = /\b(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b/i;
+const dateRe  = /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/;
+const monthRe = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?\b/i;
+const relRe   = /\b(?:today|tomorrow|tmrw|this (?:mon|tue|wed|thu|fri|sat|sun|weekend))\b/i;
+const nameRe  = /\b(?:my name is|name is|i am|i’m|im)\s+([a-z][a-z' -]{1,29})\b/i;
 
-  // patterns for times/days/services (simple but effective)
-  const timeRe = /\b([01]?\d|2[0-3])(:\d{2})?\s?(am|pm)\b/i;
-  const dayRe = /\b(mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?|sat(urday)?|sun(day)?)\b/i;
-  const dateRe = /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/;
-  const serviceRe = /\b(facial|massage|wax|laser|brows?|mani|pedi|peel|micro(?:derm)?|facelift)\b/i;
-
-  for (let i = history.length - 1; i >= 0; i--) {
-    const m = history[i];
-    if (m.role !== 'user') continue;
-    const txt = m.content || '';
-    if (timeRe.test(txt) || dayRe.test(txt) || dateRe.test(txt) || serviceRe.test(txt)) {
-      return txt.length > 260 ? (txt.slice(0, 257) + '…') : txt;
+function pickService(text) {
+  const t = text.toLowerCase();
+  let best = '';
+  for (const w of SERVICE_WORDS) {
+    if (t.includes(w)) {
+      if (w.length > best.length) best = w; // prefer longer phrase
     }
   }
-  return '';
+  if (best === 'standard') return 'standard massage';
+  return best || '';
 }
 
+function whenPhrase(text) {
+  const t = text;
+  const m = (monthRe.exec(t) || [])[0];
+  const d = (dateRe.exec(t)  || [])[0];
+  const day = (dayRe.exec(t) || [])[0];
+  const rel = (relRe.exec(t) || [])[0];
+  const tm  = (timeRe.exec(t)|| [])[0];
+
+  // combine best we can
+  if (m && tm)   return `${m} ${tm}`;
+  if (d && tm)   return `${d} ${tm}`;
+  if (day && tm) return `${day} ${tm}`;
+  if (rel && tm) return `${rel} ${tm}`;
+  return m || d || day || rel || tm || '';
+}
+
+function nameFrom(text) {
+  const m = nameRe.exec(text);
+  if (!m) return '';
+  const raw = m[1].trim();
+  return raw.split(/\s+/).map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' ');
+}
+
+function extractSlotsFromMessages(history, currentUserMsg) {
+  const slots = { service: '', when: '', name: '' };
+
+  for (const m of history) {
+    if (m.role !== 'user') continue;
+    if (!slots.service) slots.service = pickService(m.content);
+    if (!slots.when)    slots.when    = whenPhrase(m.content);
+    if (!slots.name)    slots.name    = nameFrom(m.content);
+  }
+
+  if (currentUserMsg) {
+    if (!slots.service) slots.service = pickService(currentUserMsg);
+    if (!slots.when)    slots.when    = whenPhrase(currentUserMsg);
+    if (!slots.name)    slots.name    = nameFrom(currentUserMsg);
+  }
+
+  return slots;
+}
+
+function missingFields(slots) {
+  const miss = [];
+  if (!slots.service) miss.push('service');
+  if (!slots.when)    miss.push('date/time');
+  if (!slots.name)    miss.push('name');
+  return miss;
+}
+
+/* ----------------------------- Main handler ----------------------------- */
 exports.handler = async (event) => {
   const params = new URLSearchParams(event.body || '');
   const from = params.get('From') || ''; // customer (E.164)
@@ -130,7 +185,7 @@ exports.handler = async (event) => {
     console.error('Inbound log failed:', e.message);
   }
 
-  // 2) Compliance keywords
+  // 2) Compliance keywords (log + let Twilio send its reply)
   if (OPT_OUT_KEYWORDS.test(body) || OPT_IN_KEYWORDS.test(body) || HELP_KEYWORDS.test(body)) {
     let complianceType = 'compliance';
     if (OPT_OUT_KEYWORDS.test(body)) complianceType = 'optout';
@@ -146,7 +201,6 @@ exports.handler = async (event) => {
     } catch (e) {
       console.error('Compliance log failed:', e.message);
     }
-    // Let Twilio send the official compliance reply
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/xml' },
@@ -163,7 +217,7 @@ exports.handler = async (event) => {
   } else if (/^reschedule$/i.test(body)) {
     reply = 'Sure, please tell us your preferred date/time.';
   } else {
-    // GPT path with history + intent hint
+    // AI path with memory + slot tracking
     kind = 'ai';
 
     let history = [];
@@ -172,19 +226,28 @@ exports.handler = async (event) => {
     } catch (e) {
       console.error('History fetch failed:', e.message);
     }
-    const intentHint = extractIntentHint(history);
+
+    const slots = extractSlotsFromMessages(history, body);
+    const missing = missingFields(slots);
 
     const messages = [
       {
         role: "system",
         content:
 `You are a helpful receptionist for ${spaName}.
-- Always use prior context; short follow-ups like “will it work?” or “that’s fine” refer to the most recent unresolved request (date/time/service).
-- You DO NOT have live calendar access. Never assert availability as a fact.
-- When asked to book or confirm, gather missing details (service, date, time, name) or propose next steps (two alternate times or the booking link).
-- Stay concise (1–3 SMS-length sentences).`
+You DO NOT have live calendar access. Never assert availability as a fact.
+Use prior context; short follow-ups like “will it work?” refer to the most recent unresolved request.
+Known so far (may be empty):
+- Service: ${slots.service || '—'}
+- When: ${slots.when || '—'}
+- Name: ${slots.name || '—'}
+Missing fields: ${missing.length ? missing.join(', ') : 'none'}
+
+Behavior:
+- If at least one field is missing, ask ONLY for missing fields (one compact question).
+- If all fields are present, acknowledge and say you'll hold the request and someone will confirm shortly (no fake confirmations).
+- Keep replies to 1–3 SMS-length sentences.`
       },
-      ...(intentHint ? [{ role: "system", content: `Context hint (last user intent): ${intentHint}` }] : []),
       ...history,
       { role: "user", content: body }
     ];
@@ -197,6 +260,36 @@ exports.handler = async (event) => {
       });
       reply = (completion.choices?.[0]?.message?.content || '').trim();
       if (!reply) throw new Error('Empty AI reply');
+
+      // If all slots present, log a pending booking row
+      if (missing.length === 0) {
+        try {
+          await appendRow({
+            sheetId: SHEET_ID,
+            tabName: 'bookings',
+            row: [
+              now,                 // timestamp_iso
+              '',                  // booking_id
+              spaName,             // spa_id (using name for now)
+              'sms',               // channel
+              slots.name,          // name
+              from,                // phone
+              '',                  // email
+              slots.service,       // service
+              slots.when,          // start_time (raw phrase for now)
+              '',                  // timezone
+              'sms',               // source
+              '',                  // notes
+              '',                  // staff
+              'pending',           // status
+              '',                  // price
+              ''                   // revenue
+            ]
+          });
+        } catch (e) {
+          console.error('Pending booking log failed:', e.message);
+        }
+      }
     } catch (e) {
       console.error("OpenAI error:", e.message);
       kind = 'auto';
