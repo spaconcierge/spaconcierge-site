@@ -6,6 +6,11 @@ const OpenAI = require('openai');
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 8000 });
 
+// Define opt-out / opt-in / help keywords we want to log
+const OPT_OUT_KEYWORDS = /^(stop|cancel|end|optout|quit|revoke|stopall|unsubscribe)$/i;
+const OPT_IN_KEYWORDS  = /^(start|unstop|yes)$/i;
+const HELP_KEYWORDS    = /^(help)$/i;
+
 exports.handler = async (event) => {
   const params = new URLSearchParams(event.body || '');
   const from = params.get('From') || '';
@@ -14,7 +19,7 @@ exports.handler = async (event) => {
   const spaName = spaForNumber(to);
   const now = new Date().toISOString();
 
-  // 1) Log inbound
+  // 1) Log inbound (always)
   try {
     await appendRow({
       sheetId: process.env.SHEET_ID || process.env.GOOGLE_SHEETS_ID,
@@ -25,7 +30,32 @@ exports.handler = async (event) => {
     console.error('Inbound log failed:', e.message);
   }
 
-  // 2) Decide reply
+  // 2) Compliance keyword logging
+  if (OPT_OUT_KEYWORDS.test(body) || OPT_IN_KEYWORDS.test(body) || HELP_KEYWORDS.test(body)) {
+    let complianceType = 'compliance';
+    if (OPT_OUT_KEYWORDS.test(body)) complianceType = 'optout';
+    if (OPT_IN_KEYWORDS.test(body))  complianceType = 'optin';
+    if (HELP_KEYWORDS.test(body))    complianceType = 'help';
+
+    try {
+      await appendRow({
+        sheetId: process.env.SHEET_ID || process.env.GOOGLE_SHEETS_ID,
+        tabName: 'messages',
+        row: [now, spaName, '-', to, from, 'sms', `inbound:${complianceType}`, body, 'N/A', '']
+      });
+    } catch (e) {
+      console.error('Compliance log failed:', e.message);
+    }
+
+    // Don’t override Twilio’s built-in compliance handling
+    return {
+      statusCode: 200,
+      headers: { 'Content-Type': 'application/xml' },
+      body: new twilio.twiml.MessagingResponse().toString()
+    };
+  }
+
+  // 3) Decide reply
   let reply;
   let kind = 'auto';
 
@@ -56,11 +86,11 @@ exports.handler = async (event) => {
     }
   }
 
-  // 3) TwiML response
+  // 4) TwiML response
   const twiml = new twilio.twiml.MessagingResponse();
   twiml.message(reply);
 
-  // 4) Log outbound
+  // 5) Log outbound
   try {
     await appendRow({
       sheetId: process.env.SHEET_ID || process.env.GOOGLE_SHEETS_ID,
