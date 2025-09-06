@@ -20,22 +20,23 @@ exports.handler = async (event) => {
   const spaName = spaForNumber(to);
   const now = new Date().toISOString();
 
-  // Log consent
+  // --- 1. Log consent decision ---
   try {
     await appendRow({
-      sheetId: process.env.SHEET_ID,
-      tabName: spaName,
+      // prefer explicit env, fallback handled inside _sheets
+      sheetId: process.env.SHEET_ID || process.env.GOOGLE_SHEETS_ID,
+      tabName: 'consents', // stable tab, include spaName as a column
       row: [
-        now, callSid, to, from,
+        now, spaName, callSid, to, from,
         'voice', 'consent', '-', accepted ? 'YES' : 'NO', speech || digits
       ]
     });
   } catch (e) {
-    // Don’t fail the call if Sheets has a hiccup
+    console.error('Consent log append failed:', e.message);
   }
 
   if (accepted) {
-    // Send the “first text”
+    // --- 2. Send the “first text” ---
     const client = twilio(
       process.env.TWILIO_ACCOUNT_SID,
       process.env.TWILIO_AUTH_TOKEN
@@ -48,19 +49,36 @@ exports.handler = async (event) => {
     try {
       await client.messages.create({ to: from, from: to, body });
 
-      // Log SMS send
-      await appendRow({
-        sheetId: process.env.SHEET_ID,
-        tabName: spaName,
-        row: [now, callSid, to, from, 'sms', 'outbound:first', body, 'N/A', 'sent after consent']
-      });
+      // --- 3. Log SMS send success ---
+      try {
+        await appendRow({
+          sheetId: process.env.SHEET_ID || process.env.GOOGLE_SHEETS_ID,
+          tabName: 'messages',
+          row: [
+            now, spaName, callSid, to, from,
+            'sms', 'outbound:first', body, 'N/A', 'sent after consent'
+          ]
+        });
+      } catch (e) {
+        console.error('SMS send log append failed:', e.message);
+      }
+
     } catch (e) {
-      // Log SMS failure
-      await appendRow({
-        sheetId: process.env.SHEET_ID,
-        tabName: spaName,
-        row: [now, callSid, to, from, 'sms', 'error', e.message, 'N/A', 'send failed']
-      });
+      console.error('Twilio SMS send failed:', e.message);
+
+      // --- 4. Log SMS send failure ---
+      try {
+        await appendRow({
+          sheetId: process.env.SHEET_ID || process.env.GOOGLE_SHEETS_ID,
+          tabName: 'messages',
+          row: [
+            now, spaName, callSid, to, from,
+            'sms', 'error', e.message, 'N/A', 'send failed'
+          ]
+        });
+      } catch (e2) {
+        console.error('SMS failure log append failed:', e2.message);
+      }
     }
 
     twiml.say('Thanks. We just sent you a text to continue. Goodbye.');
@@ -70,7 +88,7 @@ exports.handler = async (event) => {
 
   return {
     statusCode: 200,
-    headers: {'Content-Type': 'text/xml'},
+    headers: { 'Content-Type': 'text/xml' },
     body: twiml.toString()
   };
 };
