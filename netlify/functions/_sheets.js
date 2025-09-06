@@ -1,55 +1,65 @@
-// _sheets.js
+// netlify/functions/_sheets.js
 const { google } = require('googleapis');
 
-function decodeServiceAccount() {
-  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (!raw) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON missing');
-  return raw.trim().startsWith('{')
-    ? JSON.parse(raw)
-    : JSON.parse(Buffer.from(raw, 'base64').toString('utf8'));
+function parseJsonBlob(raw) {
+  try {
+    const txt = String(raw || '').trim();
+    const json = txt.startsWith('{') ? JSON.parse(txt) : JSON.parse(Buffer.from(txt, 'base64').toString('utf8'));
+    if (json && json.client_email && json.private_key) {
+      return { client_email: json.client_email, private_key: json.private_key };
+    }
+  } catch {}
+  return null;
+}
+
+function getServiceAccount() {
+  // Preferred split vars
+  let email = process.env.GOOGLE_CLIENT_EMAIL || '';
+  let key = process.env.GOOGLE_PRIVATE_KEY || '';
+  if (key) key = key.replace(/\\n/g, '\n');
+
+  if (email && key) return { client_email: email, private_key: key };
+
+  // Fallback JSON blob
+  const blob = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '';
+  const parsed = parseJsonBlob(blob);
+  if (parsed) return parsed;
+
+  throw new Error('Google SA credentials missing (need GOOGLE_CLIENT_EMAIL+GOOGLE_PRIVATE_KEY or GOOGLE_SERVICE_ACCOUNT_JSON).');
 }
 
 async function getSheets() {
-  const creds = decodeServiceAccount();
+  const sa = getServiceAccount();
   const auth = new google.auth.JWT(
-    creds.client_email,
+    sa.client_email,
     null,
-    creds.private_key,
+    sa.private_key,
     ['https://www.googleapis.com/auth/spreadsheets']
   );
-  await auth.authorize();
+  // googleapis will authorize lazily; no need to await auth.authorize()
   return google.sheets({ version: 'v4', auth });
 }
 
-// Ensures tab exists; creates it if missing
+// Ensure tab exists
 async function ensureSheet({ sheets, spreadsheetId, tabName }) {
   try {
-    await sheets.spreadsheets.get({
-      spreadsheetId,
-      ranges: [tabName]
-    });
+    await sheets.spreadsheets.values.get({ spreadsheetId, range: `${tabName}!A:A` });
   } catch {
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
-      requestBody: {
-        requests: [{ addSheet: { properties: { title: tabName } } }]
-      }
+      requestBody: { requests: [{ addSheet: { properties: { title: tabName } } }] }
     });
     console.log(`Created missing sheet tab: ${tabName}`);
   }
 }
 
 async function appendRow({ sheetId, tabName, row }) {
-  const spreadsheetId =
-    sheetId || process.env.SHEET_ID || process.env.GOOGLE_SHEETS_ID;
+  const spreadsheetId = sheetId || process.env.SHEET_ID || process.env.GOOGLE_SHEETS_ID;
   if (!spreadsheetId) throw new Error('Missing spreadsheetId (SHEET_ID/GOOGLE_SHEETS_ID)');
 
   const sheets = await getSheets();
-
-  // Make sure the tab exists
   await ensureSheet({ sheets, spreadsheetId, tabName });
 
-  // Append the row
   await sheets.spreadsheets.values.append({
     spreadsheetId,
     range: `${tabName}!A:Z`,
