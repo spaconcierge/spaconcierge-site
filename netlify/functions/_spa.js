@@ -1,14 +1,14 @@
-// _spa.js
+// netlify/functions/_spa.js  (CJS)  — replace file
 let map = {};
 try {
-  map = JSON.parse(process.env.SPA_CONFIG_JSON || '{}');
-} catch {}
+  // support both names for consistency with voice.js
+  const raw = process.env.SPA_CONFIG_JSON || process.env.SPA_CONFIG || '{}';
+  map = JSON.parse(raw);
+} catch { map = {}; }
 
 function spaForNumber(twilioTo) {
-  // map like { "+14155551234": { name: "Glow Spa" } }
   return (map[twilioTo] && map[twilioTo].name)
       || process.env.DEFAULT_SPA_NAME
       || 'SpaConcierge';
 }
-
 module.exports = { spaForNumber };
