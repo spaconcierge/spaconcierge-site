@@ -45,8 +45,8 @@ export async function getConfigs(force = false) {
       greeting_template: get('greeting_template'),
       after_hours_template: get('after_hours_template'),
       book_link: get('book_link'),
-      sheets_ops_bookings_id: get('https://docs.google.com/spreadsheets/d/1QqWKehxNLbIaaSvdJTa6FzBuFrLGUbo4wCReZa90U0A/edit?gid=0#gid=0'),
-      sheets_ops_messages_id: get('https://docs.google.com/spreadsheets/d/1QqWKehxNLbIaaSvdJTa6FzBuFrLGUbo4wCReZa90U0A/edit?gid=0#gid=0'),
+      sheets_ops_bookings_id: get('sheets_ops_bookings_id'),
+      sheets_ops_messages_id: get('sheets_ops_messages_id'),
     };
     if (conf.spa_id) bySpaId[conf.spa_id] = conf;
     if (conf.sms_number) byNumber[conf.sms_number] = conf.spa_id;
