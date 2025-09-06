@@ -1,7 +1,12 @@
-// sms.js
-const { appendRow } = require('./_sheets');              // writes rows to Sheets
-const { spaForNumber } = require('./_spa');              // legacy display name for sheet rows
-const { getConfigs } = require('./_lib/config');         // your existing TS config loader
+// netlify/functions/sms.js
+// ----------------------------------------------------------------------------
+// Keeps existing behavior (compliance logging, C/reschedule keywords, history,
+// bookings logging) and adds per-SPA config wiring (sheets, tz, services, etc.)
+// ----------------------------------------------------------------------------
+
+const { appendRow } = require('./_sheets');          // writes a row (we keep this)
+const { spaForNumber } = require('./_spa');          // legacy display name fallback
+const { getConfigs } = require('./_lib/config');     // your TS config loader (spas tab)
 const twilio = require('twilio');
 const { google } = require('googleapis');
 let OpenAI = require('openai'); OpenAI = OpenAI.default || OpenAI;
@@ -12,18 +17,17 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 8000 })
 const HISTORY_LIMIT        = Number(process.env.HISTORY_LIMIT  || 10);
 const HISTORY_WINDOW_HOURS = Number(process.env.HISTORY_HOURS || 48);
 
-// Compliance keyword patterns (we log these and let Twilio adv. opt-out do the replying)
+/* ----------------------- Compliance keywords ------------------------ */
 const OPT_OUT_KEYWORDS = /^(stop|cancel|end|optout|quit|revoke|stopall|unsubscribe)$/i;
 const OPT_IN_KEYWORDS  = /^(start|unstop|yes)$/i;
 const HELP_KEYWORDS    = /^(help)$/i;
 
-/* ---------------------------- Utilities ----------------------------- */
+/* ----------------------------- Helpers ------------------------------ */
 function normalize(num) {
   if (!num) return '';
   const digits = String(num).replace(/[^\d]/g, '');
-  return digits.replace(/^1/, ''); // drop +1 if present (US)
+  return digits.replace(/^1/, ''); // US normalize
 }
-
 function titleCase(s) {
   return String(s || '').trim().replace(/\s+/g, ' ')
     .split(' ')
@@ -31,24 +35,27 @@ function titleCase(s) {
     .join(' ');
 }
 
-/* ----------------------- Google Sheets (RO) ------------------------- */
-function decodeServiceAccount() {
-  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (!raw) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON missing');
-  return raw.trim().startsWith('{')
-    ? JSON.parse(raw)
-    : JSON.parse(Buffer.from(raw, 'base64').toString('utf8'));
-}
+/* -------------------- Google Sheets (read-only) --------------------- */
+/** Use split env vars; do NOT depend on GOOGLE_SERVICE_ACCOUNT_JSON. */
+async function getSheetsRO() {
+  const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
+  const privateKey  = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
 
-async function getSheetsClient(scope = 'https://www.googleapis.com/auth/spreadsheets.readonly') {
-  const sa = decodeServiceAccount();
-  const auth = new google.auth.JWT(sa.client_email, null, sa.private_key, [scope]);
+  if (!clientEmail || !privateKey) {
+    throw new Error('Missing GOOGLE_CLIENT_EMAIL / GOOGLE_PRIVATE_KEY');
+  }
+
+  const auth = new google.auth.JWT(
+    clientEmail,
+    undefined,
+    privateKey,
+    ['https://www.googleapis.com/auth/spreadsheets.readonly']
+  );
   await auth.authorize();
   return google.sheets({ version: 'v4', auth });
 }
 
-/* ---------------------------- Services ----------------------------- */
-// Default service catalog (can be overridden per-spa later via config)
+/* ------------------- Default service catalog (fallback) ------------- */
 const DEFAULT_SERVICES = [
   { key: "facial",  variants: ["facial","classic facial","deep cleanse facial"], duration_min: 60, price: 120 },
   { key: "massage", variants: ["massage","standard massage","massage standard","relaxation massage"], duration_min: 60, price: 100 },
@@ -70,7 +77,7 @@ function makeServiceIndex(services) {
       if (!variantToKey.has(vv)) variantToKey.set(vv, key);
     }
   }
-  variants.sort((a,b) => b.length - a.length); // prefer longest phrase
+  variants.sort((a,b) => b.length - a.length); // prefer longer phrase
   return { variantToKey, variants };
 }
 
@@ -109,7 +116,6 @@ function nameFrom(text, idx) {
   const m1 = namePhraseRe.exec(t);
   if (m1) return titleCase(m1[1]);
 
-  // bare first token, but avoid matching a service as a "name"
   const m2 = /^([a-z][a-z' -]{1,29})(?:,|\s|$)/i.exec(t.trim());
   if (m2) {
     const candidate = m2[1].toLowerCase();
@@ -133,7 +139,6 @@ function extractSlotsFromMessages(history, currentUserMsg, idx) {
   }
   return slots;
 }
-
 function missingFields(slots) {
   const miss = [];
   if (!slots.service) miss.push('service');
@@ -142,7 +147,7 @@ function missingFields(slots) {
   return miss;
 }
 
-/* -------------------- Config + runtime (with fallback) ------------------- */
+/* -------------------- Runtime from config (with fallback) ----------- */
 function defaultRuntime(e164To) {
   const DEFAULT_SHEET_ID = process.env.SHEET_ID || process.env.GOOGLE_SHEETS_ID;
   const spaSheetKey = spaForNumber(e164To) || 'Spa';
@@ -164,7 +169,6 @@ function defaultRuntime(e164To) {
 async function loadSpaRuntime(e164To) {
   let cfgs = null;
   try {
-    // Will read SHEETS_CONFIG_ID inside your _lib/config.ts
     cfgs = await getConfigs(); // { bySpaId, byNumber }
   } catch (err) {
     console.error('getConfigs failed. Falling back to default sheet.', err.message);
@@ -188,8 +192,8 @@ async function loadSpaRuntime(e164To) {
   }
 
   const spaConf = bySpaId[spaId];
-
   const DEFAULT_SHEET_ID = process.env.SHEET_ID || process.env.GOOGLE_SHEETS_ID;
+
   const messagesSheetId = spaConf.sheets_ops_messages_id || DEFAULT_SHEET_ID;
   const bookingsSheetId = spaConf.sheets_ops_bookings_id || DEFAULT_SHEET_ID;
 
@@ -215,10 +219,10 @@ async function loadSpaRuntime(e164To) {
   };
 }
 
-/* ---------------------- History from the messages sheet ------------------ */
+/* ---------------- History: pull last N turns for (to,from) --------- */
 // messages!A:J -> timestamp | spa | '-' | to | from | channel | status | body | error | notes
 async function fetchRecentHistory({ messagesSheetId, spaKey, to, from, limit = HISTORY_LIMIT, windowHours = HISTORY_WINDOW_HOURS }) {
-  const sheets = await getSheetsClient();
+  const sheets = await getSheetsRO();
   const resp = await sheets.spreadsheets.values.get({
     spreadsheetId: messagesSheetId,
     range: 'messages!A:J',
@@ -244,10 +248,9 @@ async function fetchRecentHistory({ messagesSheetId, spaKey, to, from, limit = H
 
     if (spa !== spaKey) continue;
 
-    // SAME conversation = either inbound (to=our#, from=client) OR outbound (to=client, from=our#)
     const matchesPair =
-      (To === normTo && From === normFrom) ||
-      (To === normFrom && From === normTo);
+      (To === normTo && From === normFrom) || // inbound
+      (To === normFrom && From === normTo);   // outbound
     if (!matchesPair) continue;
 
     if (!text) continue;
@@ -260,7 +263,7 @@ async function fetchRecentHistory({ messagesSheetId, spaKey, to, from, limit = H
     }
 
     let role = null;
-    if (/^inbound/i.test(status))  role = 'user';
+    if (/^inbound/i.test(status))       role = 'user';
     else if (/^outbound/i.test(status)) role = 'assistant';
     if (!role) continue;
 
@@ -270,9 +273,9 @@ async function fetchRecentHistory({ messagesSheetId, spaKey, to, from, limit = H
   return out.reverse().slice(-limit);
 }
 
-/* ------------------------------- Handler -------------------------------- */
+/* -------------------------------- Handler --------------------------- */
 exports.handler = async (event) => {
-  // Optionally allow a GET ping to sanity-check env (never leaks secrets)
+  // Simple GET health check (no secrets leaked)
   if (event.httpMethod === 'GET') {
     return { statusCode: 200, body: 'OK' };
   }
@@ -283,7 +286,7 @@ exports.handler = async (event) => {
   const body = (params.get('Body') || '').trim();
   const now = new Date().toISOString();
 
-  // Load per-spa runtime with a safe fallback
+  // Load per-SPA runtime (with safe fallback)
   let runtime = defaultRuntime(to);
   try {
     const r = await loadSpaRuntime(to);
@@ -304,7 +307,7 @@ exports.handler = async (event) => {
   const services = svcFromCfg || DEFAULT_SERVICES;
   const svcIndex = makeServiceIndex(services);
 
-  /* 1) Log inbound */
+  /* 1) Log inbound (best-effort) */
   try {
     await appendRow({
       sheetId: messagesSheetId,
@@ -313,7 +316,7 @@ exports.handler = async (event) => {
     });
   } catch (e) { console.error('Inbound log failed:', e.message); }
 
-  /* 2) Compliance keywords */
+  /* 2) Compliance keywords: log & let Twilio Advanced Opt-Out reply */
   if (OPT_OUT_KEYWORDS.test(body) || OPT_IN_KEYWORDS.test(body) || HELP_KEYWORDS.test(body)) {
     let complianceType = 'compliance';
     if (OPT_OUT_KEYWORDS.test(body)) complianceType = 'optout';
@@ -328,7 +331,6 @@ exports.handler = async (event) => {
       });
     } catch (e) { console.error('Compliance log failed:', e.message); }
 
-    // let Twilio Advanced Opt-Out send the actual text
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/xml' },
@@ -347,7 +349,7 @@ exports.handler = async (event) => {
   } else {
     kind = 'ai';
 
-    // history + slots
+    // Pull recent history (to/from pair) and extract slots
     let history = [];
     try {
       history = await fetchRecentHistory({
@@ -355,9 +357,7 @@ exports.handler = async (event) => {
         spaKey: spaSheetKey,
         to, from
       });
-    } catch (e) {
-      console.error('History fetch failed:', e.message);
-    }
+    } catch (e) { console.error('History fetch failed:', e.message); }
 
     const slots = extractSlotsFromMessages(history, body, svcIndex);
     const missing = missingFields(slots);
@@ -395,7 +395,7 @@ Behavior:
       reply = (completion.choices?.[0]?.message?.content || '').trim();
       if (!reply) throw new Error('Empty AI reply');
 
-      // If the user gave us everything, log a PENDING booking
+      // If all slots present → log a pending booking row
       if (missing.length === 0) {
         try {
           await appendRow({
@@ -404,13 +404,13 @@ Behavior:
             row: [
               now,                 // timestamp_iso
               '',                  // booking_id
-              spaSheetKey,         // spa_id
+              spaSheetKey,         // spa_id (use spa_id if you prefer)
               'sms',               // channel
               slots.name,          // name
               from,                // phone
               '',                  // email
               slots.service,       // service
-              slots.when,          // start_time (free-form)
+              slots.when,          // start_time (free-form for now)
               tz || '',            // timezone
               'sms',               // source
               '',                  // notes
