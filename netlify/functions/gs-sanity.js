@@ -16,7 +16,7 @@ exports.handler = async () => {
     };
   } catch (e) {
     return {
-      statusCode: 500,
+      statusCode: 400,
       body: JSON.stringify({ ok: false, error: e.message })
     };
   }
