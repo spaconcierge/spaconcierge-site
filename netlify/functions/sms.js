@@ -8,7 +8,7 @@ let OpenAI = require('openai'); OpenAI = OpenAI.default || OpenAI;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 8000 });
 
 /* ----------------------------- Configuration ---------------------------- */
-const HISTORY_LIMIT = Number(process.env.HISTORY_LIMIT || 8);         // messages to include
+const HISTORY_LIMIT = Number(process.env.HISTORY_LIMIT || 10);        // messages to include
 const HISTORY_WINDOW_HOURS = Number(process.env.HISTORY_HOURS || 48); // recent window
 
 // Services to detect (customize later per spa)
@@ -69,7 +69,13 @@ async function fetchRecentHistory({ sheetId, spaName, to, from, limit = HISTORY_
     const text = (r[7] || '').toString().trim();
 
     if (spa !== spaName) continue;
-    if (To !== to || From !== from) continue;
+
+    // ✅ keep BOTH directions for this number pair
+    const matchesPair =
+      (To === to && From === from) ||   // inbound (user → spa)
+      (To === from && From === to);     // outbound (spa → user)
+    if (!matchesPair) continue;
+
     if (!text) continue;
 
     // Skip compliance/system events
@@ -89,6 +95,7 @@ async function fetchRecentHistory({ sheetId, spaName, to, from, limit = HISTORY_
     out.push({ role, content: text });
   }
 
+  // return newest last, limited
   return out.reverse().slice(-limit);
 }
 
@@ -99,7 +106,14 @@ const dayRe   = /\b(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(
 const dateRe  = /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/;
 const monthRe = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?\b/i;
 const relRe   = /\b(?:today|tomorrow|tmrw|this (?:mon|tue|wed|thu|fri|sat|sun|weekend))\b/i;
-const nameRe  = /\b(?:my name is|name is|i am|i’m|im)\s+([a-z][a-z' -]{1,29})\b/i;
+const namePhraseRe  = /\b(?:my name(?:'s)? is|name is|i am|i'm|im|this is)\s+([a-z][a-z' -]{1,29})\b/i;
+
+function titleCase(s) {
+  return s.trim().replace(/\s+/g, ' ')
+    .split(' ')
+    .map(x => x.charAt(0).toUpperCase() + x.slice(1).toLowerCase())
+    .join(' ');
+}
 
 function pickService(text) {
   const t = text.toLowerCase();
@@ -121,7 +135,6 @@ function whenPhrase(text) {
   const rel = (relRe.exec(t) || [])[0];
   const tm  = (timeRe.exec(t)|| [])[0];
 
-  // combine best we can
   if (m && tm)   return `${m} ${tm}`;
   if (d && tm)   return `${d} ${tm}`;
   if (day && tm) return `${day} ${tm}`;
@@ -130,10 +143,17 @@ function whenPhrase(text) {
 }
 
 function nameFrom(text) {
-  const m = nameRe.exec(text);
-  if (!m) return '';
-  const raw = m[1].trim();
-  return raw.split(/\s+/).map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' ');
+  // phrase-based: "I'm Nick", "My name is Nick", etc.
+  const m1 = namePhraseRe.exec(text);
+  if (m1) return titleCase(m1[1]);
+
+  // bare first token (e.g., "Nick" or "Nick, tmrw 4pm"), while avoiding service words
+  const m2 = /^([a-z][a-z' -]{1,29})(?:,|\s|$)/i.exec(text.trim());
+  if (m2) {
+    const candidate = m2[1].toLowerCase();
+    if (!SERVICE_WORDS.some(w => candidate.includes(w))) return titleCase(candidate);
+  }
+  return '';
 }
 
 function extractSlotsFromMessages(history, currentUserMsg) {
