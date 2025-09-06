@@ -8,12 +8,16 @@ exports.handler = async () => {
 
     const { headers, data } = await readSheet({ spreadsheetId, tabName: 'spas' });
     const preview = [headers, ...(data || [])].slice(0, 3);
+
     return {
       statusCode: 200,
-      body: JSON.stringify({ ok: true, rows_preview: preview }),
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ok: true, rows_preview: preview })
     };
   } catch (e) {
-    return { statusCode: 500, body: JSON.stringify({ ok: false, error: e.message }) };
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ ok: false, error: e.message })
+    };
   }
 };
