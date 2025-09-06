@@ -7,22 +7,36 @@ let OpenAI = require('openai'); OpenAI = OpenAI.default || OpenAI;
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 8000 });
 
-/* ----------------------------- Configuration ---------------------------- */
-const HISTORY_LIMIT = Number(process.env.HISTORY_LIMIT || 10);        // messages to include
-const HISTORY_WINDOW_HOURS = Number(process.env.HISTORY_HOURS || 48); // recent window
+/* ---------------------------------------------------------------------- */
+/*                              Configuration                             */
+/* ---------------------------------------------------------------------- */
+const HISTORY_LIMIT        = Number(process.env.HISTORY_LIMIT  || 10); // how many turns to send to GPT
+const HISTORY_WINDOW_HOURS = Number(process.env.HISTORY_HOURS || 48);  // only pull recent history
 
-// Services to detect (customize later per spa)
+// Services to detect (quick heuristics; we'll replace with catalog per spa later)
 const SERVICE_WORDS = [
   'facial','massage','massage standard','standard','wax','laser','brow','brows',
   'mani','pedicure','peel','microderm','microdermabrasion','facelift'
 ];
 
-// Compliance keyword patterns
+// Compliance keyword patterns (Twilio also handles, we just LOG them)
 const OPT_OUT_KEYWORDS = /^(stop|cancel|end|optout|quit|revoke|stopall|unsubscribe)$/i;
 const OPT_IN_KEYWORDS  = /^(start|unstop|yes)$/i;
 const HELP_KEYWORDS    = /^(help)$/i;
 
-/* ------------------------ Google Sheets (read-only) --------------------- */
+/* ---------------------------------------------------------------------- */
+/*                         Helpers: phone normalization                    */
+/* ---------------------------------------------------------------------- */
+// Normalize to NANP 10 digits (strip punctuation and leading country code).
+function normalize(num) {
+  if (!num) return '';
+  const digits = String(num).replace(/[^\d]/g, '');
+  return digits.replace(/^1/, ''); // treat leading "1" as US country code
+}
+
+/* ---------------------------------------------------------------------- */
+/*                     Google Sheets (read-only client)                    */
+/* ---------------------------------------------------------------------- */
 function decodeServiceAccount() {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (!raw) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON missing');
@@ -43,42 +57,51 @@ async function getSheetsClient() {
   return google.sheets({ version: 'v4', auth });
 }
 
-/* --------------------- Fetch recent conversation turns ------------------ */
-// messages!A:J -> timestamp | spa | '-' | to | from | channel | status | body | error | notes
-async function fetchRecentHistory({ sheetId, spaName, to, from, limit = HISTORY_LIMIT, windowHours = HISTORY_WINDOW_HOURS }) {
+/* ---------------------------------------------------------------------- */
+/*              Fetch recent turns for this (to,from) conversation         */
+/*  messages!A:J -> timestamp | spa | '-' | to | from | channel | status | */
+/*                     body | error | notes                                */
+/* ---------------------------------------------------------------------- */
+async function fetchRecentHistory({
+  sheetId, spaName, to, from,
+  limit = HISTORY_LIMIT,
+  windowHours = HISTORY_WINDOW_HOURS
+}) {
   const sheets = await getSheetsClient();
   const resp = await sheets.spreadsheets.values.get({
     spreadsheetId: sheetId,
     range: 'messages!A:J',
   });
+
   const rows = resp.data.values || [];
   if (!rows.length) return [];
 
+  const normTo = normalize(to);
+  const normFrom = normalize(from);
   const nowMs = Date.now();
   const out = [];
 
+  // Walk upward from newest
   for (let i = rows.length - 1; i >= 0 && out.length < limit * 2; i--) {
     const r = rows[i];
     if (!r || r.length < 8) continue;
 
-    const ts = r[0] || '';
-    const spa = r[1] || '';
-    const To = r[3] || '';
-    const From = r[4] || '';
+    const ts     = r[0] || '';
+    const spa    = r[1] || '';
+    const To     = normalize(r[3] || '');
+    const From   = normalize(r[4] || '');
     const status = (r[6] || '').toString();
-    const text = (r[7] || '').toString().trim();
+    const text   = (r[7] || '').toString().trim();
 
     if (spa !== spaName) continue;
 
-    // ✅ keep BOTH directions for this number pair
+    // match either direction for this pair
     const matchesPair =
-      (To === to && From === from) ||   // inbound (user → spa)
-      (To === from && From === to);     // outbound (spa → user)
+      (To === normTo && From === normFrom) ||   // inbound (user→spa)
+      (To === normFrom && From === normTo);     // outbound (spa→user)
     if (!matchesPair) continue;
 
     if (!text) continue;
-
-    // Skip compliance/system events
     if (/^inbound:(optout|optin|help)/i.test(status)) continue;
 
     const t = Date.parse(ts);
@@ -88,19 +111,21 @@ async function fetchRecentHistory({ sheetId, spaName, to, from, limit = HISTORY_
     }
 
     let role = null;
-    if (/^inbound/i.test(status)) role = 'user';
+    if (/^inbound/i.test(status))  role = 'user';
     else if (/^outbound/i.test(status)) role = 'assistant';
     if (!role) continue;
 
     out.push({ role, content: text });
   }
 
-  // return newest last, limited
+  // Oldest → newest and only last N turns
   return out.reverse().slice(-limit);
 }
 
-/* ----------------------------- Slot tracking ---------------------------- */
-// Heuristics; calendar integration will replace this.
+/* ---------------------------------------------------------------------- */
+/*                              Slot tracking                              */
+/*   (simple heuristics; will be replaced by real calendar integration)    */
+/* ---------------------------------------------------------------------- */
 const timeRe  = /\b(?:[01]?\d|2[0-3])(?::\d{2})?\s?(?:am|pm)\b/i;
 const dayRe   = /\b(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b/i;
 const dateRe  = /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/;
@@ -116,24 +141,22 @@ function titleCase(s) {
 }
 
 function pickService(text) {
-  const t = text.toLowerCase();
+  const t = String(text || '').toLowerCase();
   let best = '';
   for (const w of SERVICE_WORDS) {
-    if (t.includes(w)) {
-      if (w.length > best.length) best = w; // prefer longer phrase
-    }
+    if (t.includes(w)) best = w.length > best.length ? w : best; // prefer longest token
   }
   if (best === 'standard') return 'standard massage';
   return best || '';
 }
 
 function whenPhrase(text) {
-  const t = text;
-  const m = (monthRe.exec(t) || [])[0];
-  const d = (dateRe.exec(t)  || [])[0];
-  const day = (dayRe.exec(t) || [])[0];
-  const rel = (relRe.exec(t) || [])[0];
-  const tm  = (timeRe.exec(t)|| [])[0];
+  const t = String(text || '');
+  const m   = (monthRe.exec(t) || [])[0];
+  const d   = (dateRe.exec(t)  || [])[0];
+  const day = (dayRe.exec(t)   || [])[0];
+  const rel = (relRe.exec(t)   || [])[0];
+  const tm  = (timeRe.exec(t)  || [])[0];
 
   if (m && tm)   return `${m} ${tm}`;
   if (d && tm)   return `${d} ${tm}`;
@@ -143,12 +166,12 @@ function whenPhrase(text) {
 }
 
 function nameFrom(text) {
-  // phrase-based: "I'm Nick", "My name is Nick", etc.
-  const m1 = namePhraseRe.exec(text);
+  const t = String(text || '');
+  const m1 = namePhraseRe.exec(t);
   if (m1) return titleCase(m1[1]);
 
-  // bare first token (e.g., "Nick" or "Nick, tmrw 4pm"), while avoiding service words
-  const m2 = /^([a-z][a-z' -]{1,29})(?:,|\s|$)/i.exec(text.trim());
+  // fallback: first token that isn't a service word
+  const m2 = /^([a-z][a-z' -]{1,29})(?:,|\s|$)/i.exec(t.trim());
   if (m2) {
     const candidate = m2[1].toLowerCase();
     if (!SERVICE_WORDS.some(w => candidate.includes(w))) return titleCase(candidate);
@@ -171,7 +194,6 @@ function extractSlotsFromMessages(history, currentUserMsg) {
     if (!slots.when)    slots.when    = whenPhrase(currentUserMsg);
     if (!slots.name)    slots.name    = nameFrom(currentUserMsg);
   }
-
   return slots;
 }
 
@@ -183,7 +205,9 @@ function missingFields(slots) {
   return miss;
 }
 
-/* ----------------------------- Main handler ----------------------------- */
+/* ---------------------------------------------------------------------- */
+/*                               Main handler                              */
+/* ---------------------------------------------------------------------- */
 exports.handler = async (event) => {
   const params = new URLSearchParams(event.body || '');
   const from = params.get('From') || ''; // customer (E.164)
@@ -194,7 +218,7 @@ exports.handler = async (event) => {
 
   const SHEET_ID = process.env.SHEET_ID || process.env.GOOGLE_SHEETS_ID;
 
-  // 1) Log inbound
+  /* 1) Always log inbound */
   try {
     await appendRow({
       sheetId: SHEET_ID,
@@ -205,7 +229,7 @@ exports.handler = async (event) => {
     console.error('Inbound log failed:', e.message);
   }
 
-  // 2) Compliance keywords (log + let Twilio send its reply)
+  /* 2) Compliance keywords: log and let Twilio’s advanced opt-out reply */
   if (OPT_OUT_KEYWORDS.test(body) || OPT_IN_KEYWORDS.test(body) || HELP_KEYWORDS.test(body)) {
     let complianceType = 'compliance';
     if (OPT_OUT_KEYWORDS.test(body)) complianceType = 'optout';
@@ -221,6 +245,7 @@ exports.handler = async (event) => {
     } catch (e) {
       console.error('Compliance log failed:', e.message);
     }
+
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/xml' },
@@ -228,14 +253,14 @@ exports.handler = async (event) => {
     };
   }
 
-  // 3) Decide reply
+  /* 3) Decide reply */
   let reply;
   let kind = 'auto';
 
   if (/^c$/i.test(body)) {
     reply = 'Confirmed ✅ See you soon! Reply HELP for help or STOP to opt out.';
   } else if (/^reschedule$/i.test(body)) {
-    reply = 'Sure, please tell us your preferred date/time.';
+    reply = 'Sure — what date and time would you like instead?';
   } else {
     // AI path with memory + slot tracking
     kind = 'ai';
@@ -255,20 +280,21 @@ exports.handler = async (event) => {
         role: "system",
         content:
 `You are a helpful receptionist for ${spaName}.
-You DO NOT have live calendar access. Never assert availability as a fact.
+You DO NOT have live calendar access; never promise confirmed availability.
 Use prior context; short follow-ups like “will it work?” refer to the most recent unresolved request.
-Known so far (may be empty):
+
+Known so far:
 - Service: ${slots.service || '—'}
 - When: ${slots.when || '—'}
 - Name: ${slots.name || '—'}
 Missing fields: ${missing.length ? missing.join(', ') : 'none'}
 
 Behavior:
-- If at least one field is missing, ask ONLY for missing fields (one compact question).
+- If any field is missing, ask ONLY for the missing fields (one compact question).
 - If all fields are present, acknowledge and say you'll hold the request and someone will confirm shortly (no fake confirmations).
 - Keep replies to 1–3 SMS-length sentences.`
       },
-      ...history,
+      ...history,                  // ← last 10 conversational turns
       { role: "user", content: body }
     ];
 
@@ -281,7 +307,7 @@ Behavior:
       reply = (completion.choices?.[0]?.message?.content || '').trim();
       if (!reply) throw new Error('Empty AI reply');
 
-      // If all slots present, log a pending booking row
+      // If all fields present, log a PENDING booking row for follow-up
       if (missing.length === 0) {
         try {
           await appendRow({
@@ -296,7 +322,7 @@ Behavior:
               from,                // phone
               '',                  // email
               slots.service,       // service
-              slots.when,          // start_time (raw phrase for now)
+              slots.when,          // start_time (raw phrase)
               '',                  // timezone
               'sms',               // source
               '',                  // notes
@@ -311,17 +337,17 @@ Behavior:
         }
       }
     } catch (e) {
-      console.error("OpenAI error:", e.message);
+      console.error('OpenAI error:', e.message);
       kind = 'auto';
       reply = "Thanks for your message — we’ll get back to you shortly.";
     }
   }
 
-  // 4) TwiML response
+  /* 4) TwiML response */
   const twiml = new twilio.twiml.MessagingResponse();
   twiml.message(reply);
 
-  // 5) Log outbound
+  /* 5) Log outbound (best-effort) */
   try {
     await appendRow({
       sheetId: SHEET_ID,
