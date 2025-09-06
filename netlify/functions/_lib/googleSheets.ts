@@ -3,14 +3,37 @@ import { google } from 'googleapis';
 
 let sheetsClient: any;
 
+function decodeServiceAccount() {
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (!raw) return null;
+  return raw.trim().startsWith('{')
+    ? JSON.parse(raw)
+    : JSON.parse(Buffer.from(raw, 'base64').toString('utf8'));
+}
+
 export function getSheets() {
   if (sheetsClient) return sheetsClient;
-  const jwt = new google.auth.JWT(
-    process.env.GOOGLE_CLIENT_EMAIL,
-    undefined,
-    (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
-    ['https://www.googleapis.com/auth/spreadsheets']
-  );
+
+  let jwt;
+  const sa = decodeServiceAccount();
+  if (sa) {
+    // Preferred path: JSON from GOOGLE_SERVICE_ACCOUNT_JSON
+    jwt = new google.auth.JWT(
+      sa.client_email,
+      undefined,
+      sa.private_key,
+      ['https://www.googleapis.com/auth/spreadsheets']
+    );
+  } else {
+    // Legacy path: individual env vars
+    jwt = new google.auth.JWT(
+      process.env.GOOGLE_CLIENT_EMAIL,
+      undefined,
+      (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
+      ['https://www.googleapis.com/auth/spreadsheets']
+    );
+  }
+
   sheetsClient = google.sheets({ version: 'v4', auth: jwt });
   return sheetsClient;
 }
@@ -18,7 +41,7 @@ export function getSheets() {
 export async function appendRows({
   spreadsheetId,
   tabName,
-  values,                // array of arrays (rows)
+  values,
 }: {
   spreadsheetId: string;
   tabName: string;
@@ -48,4 +71,5 @@ export async function readSheet({
   const rows: string[][] = (res.data.values || []) as any;
   const [headers, ...data] = rows;
   return { headers, data };
+}
 }
