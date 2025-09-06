@@ -1,4 +1,6 @@
 // netlify/functions/_lib/googleSheets.ts
+console.log("GS DEBUG email:", process.env.GOOGLE_CLIENT_EMAIL);
+console.log("GS DEBUG key starts with:", (process.env.GOOGLE_PRIVATE_KEY || '').slice(0, 30));
 import { google } from 'googleapis';
 
 let sheetsClient: any;
