@@ -95,8 +95,7 @@ const dayRe   = /\b(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(
 const dateRe  = /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/;
 const monthRe = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?\b/i;
 const relRe   = /\b(?:today|tomorrow|tmrw|this (?:mon|tue|wed|thu|fri|sat|sun|weekend))\b/i;
-const namePhraseRe  = /\b(?:my name(?:'s)? is|name is|i am|i'm|im|this is)\s+([a-z][a-z' -]{1,29})\b/i;
-
+const namePhraseRe  = /\b(?:my name(?:'s)? is|name is|i am|i'm|im|this is|call me|it's)\s+([A-Z][a-z' -]{1,29})\b/;
 function whenPhrase(text) {
   const t = String(text || '');
   const m   = (monthRe.exec(t) || [])[0];
@@ -104,23 +103,41 @@ function whenPhrase(text) {
   const day = (dayRe.exec(t)   || [])[0];
   const rel = (relRe.exec(t)   || [])[0];
   const tm  = (timeRe.exec(t)  || [])[0];
-  if (m && tm)   return `${m} ${tm}`;
-  if (d && tm)   return `${d} ${tm}`;
-  if (day && tm) return `${day} ${tm}`;
-  if (rel && tm) return `${rel} ${tm}`;
+
+  // Combine if both parts exist
+  if ((m || d || day || rel) && tm) return `${m || d || day || rel} ${tm}`;
+
+  // Return whichever exists
   return m || d || day || rel || tm || '';
 }
 
 function nameFrom(text, idx) {
-  const t = String(text || '');
+  const t = String(text || '').trim();
+
+  // Explicit phrases ("my name is", "call me", etc.)
   const m1 = namePhraseRe.exec(t);
   if (m1) return titleCase(m1[1]);
 
-  const m2 = /^([a-z][a-z' -]{1,29})(?:,|\s|$)/i.exec(t.trim());
+  // Look for any single capitalized word not in services/days/months
+  const capitalWord = /\b([A-Z][a-z]{1,29})\b/.exec(t);
+  if (capitalWord) {
+    const candidate = capitalWord[1].toLowerCase();
+    if (
+      !idx.variants.some(w => candidate.includes(w)) &&
+      !dayRe.test(candidate) &&
+      !monthRe.test(candidate)
+    ) {
+      return titleCase(capitalWord[1]);
+    }
+  }
+
+  // Fallback: bare first token
+  const m2 = /^([a-z][a-z' -]{1,29})(?:,|\s|$)/i.exec(t);
   if (m2) {
     const candidate = m2[1].toLowerCase();
     if (!idx.variants.some(w => candidate.includes(w))) return titleCase(candidate);
   }
+
   return '';
 }
 
