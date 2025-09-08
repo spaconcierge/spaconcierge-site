@@ -116,7 +116,7 @@ async function advanceBookingFSM({ runtime, from, to, body, activeBookings, serv
   await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
 
   // Log a confirm_request so the CONFIRM handler can find it
-  const confirmText = `Just to make sure I’ve got this right: ${session.data.name} — ${session.data.service} on ${whenNice}. If that looks perfect, just reply CONFIRM. Or say CHANGE if you want to adjust.`;
+  const confirmText = `Just to make sure I’ve got this right: ${session.data.name} — ${session.data.service} on ${whenNice}. If that looks perfect, just reply CONFIRM. Or say CHANGE and describe what you want to adjust.`;
 
   try {
     await appendRow({
