@@ -59,7 +59,7 @@ async function advanceBookingFSM({ runtime, from, to, body, activeBookings, serv
     session.lastUpdatedISO = nowISO;
     bookingStateMemo.set(key, session);
     await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
-    return { reply: 'Great — what date and time work best for you?' };
+    return { reply: 'Great — what date and time work best for you? Please provide full time information. Note, our working hours are 9AM to 7PM' };
   }
   // Validate hours before asking service
   if (!withinHours(session.data.ymd, session.data.hhmm, tz, hoursMap)) {
