@@ -1,14 +1,12 @@
 // netlify/functions/sms.js
 // ----------------------------------------------------------------------------
-// Preserves: compliance logging, status-callback logging, C/reschedule,
-// per-SPA config, history memory, messages schema, bookings append.
-// Adds: explicit CONFIRM gate for bookings + dedupe.
-// Uses canonical spa_id in all sheet writes. Skips compliance rows in memory.
+// Keeps existing behavior (compliance logging, C/reschedule keywords, history,
+// bookings logging) and adds per-SPA config wiring (sheets, tz, services, etc.)
 // ----------------------------------------------------------------------------
 
-const { appendRow } = require('./_sheets');
-const { spaForNumber } = require('./_spa');          // fallback display label
-const { getConfigs } = require('./_lib/config');     // loads SpaConcierge_Config.spas
+const { appendRow } = require('./_sheets');          // writes a row (we keep this)
+const { spaForNumber } = require('./_spa');          // legacy display name fallback
+const { getConfigs } = require('./_lib/config');     // your TS config loader (spas tab)
 const twilio = require('twilio');
 const { google } = require('googleapis');
 let OpenAI = require('openai'); OpenAI = OpenAI.default || OpenAI;
@@ -17,9 +15,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 8000 })
 
 /* ----------------------------- Tunables ----------------------------- */
 const HISTORY_LIMIT        = Number(process.env.HISTORY_LIMIT  || 10);
-const HISTORY_WINDOW_HOURS = Number(process.env.HISTORY_HOURS  || 48);
-const CONFIRM_RE           = /^confirm\b/i;
-const DEDUPE_WINDOW_MIN    = 60; // minutes
+const HISTORY_WINDOW_HOURS = Number(process.env.HISTORY_HOURS || 48);
 
 /* ----------------------- Compliance keywords ------------------------ */
 const OPT_OUT_KEYWORDS = /^(stop|cancel|end|optout|quit|revoke|stopall|unsubscribe)$/i;
@@ -30,7 +26,7 @@ const HELP_KEYWORDS    = /^(help)$/i;
 function normalize(num) {
   if (!num) return '';
   const digits = String(num).replace(/[^\d]/g, '');
-  return digits.replace(/^1/, ''); // drop +1 (US)
+  return digits.replace(/^1/, ''); // US normalize
 }
 function titleCase(s) {
   return String(s || '').trim().replace(/\s+/g, ' ')
@@ -40,10 +36,15 @@ function titleCase(s) {
 }
 
 /* -------------------- Google Sheets (read-only) --------------------- */
+/** Use split env vars; do NOT depend on GOOGLE_SERVICE_ACCOUNT_JSON. */
 async function getSheetsRO() {
   const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
   const privateKey  = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
-  if (!clientEmail || !privateKey) throw new Error('Missing GOOGLE_CLIENT_EMAIL / GOOGLE_PRIVATE_KEY');
+
+  if (!clientEmail || !privateKey) {
+    throw new Error('Missing GOOGLE_CLIENT_EMAIL / GOOGLE_PRIVATE_KEY');
+  }
+
   const auth = new google.auth.JWT(
     clientEmail,
     undefined,
@@ -76,12 +77,15 @@ function makeServiceIndex(services) {
       if (!variantToKey.has(vv)) variantToKey.set(vv, key);
     }
   }
-  variants.sort((a,b) => b.length - a.length); // prefer longest phrase
+  variants.sort((a,b) => b.length - a.length); // prefer longer phrase
   return { variantToKey, variants };
 }
+
 function pickService(text, idx) {
   const t = String(text || '').toLowerCase();
-  for (const v of idx.variants) if (t.includes(v)) return idx.variantToKey.get(v) || '';
+  for (const v of idx.variants) {
+    if (t.includes(v)) return idx.variantToKey.get(v) || '';
+  }
   return '';
 }
 
@@ -92,7 +96,7 @@ const dateRe  = /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/;
 const monthRe = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?\b/i;
 const relRe   = /\b(?:today|tomorrow|tmrw|this (?:mon|tue|wed|thu|fri|sat|sun|weekend))\b/i;
 const namePhraseRe  = /\b(?:my name(?:'s)? is|name is|i am|i'm|im|this is|call me|it's)\s+([A-Z][a-z' -]{1,29})\b/;
-
+// --- date/time helpers (replace whenPhrase with these) ---
 function firstMatchWithIndex(text, regexes) {
   const t = String(text || '');
   let best = null; // {val, idx}
@@ -105,33 +109,50 @@ function firstMatchWithIndex(text, regexes) {
   }
   return best ? best.val : '';
 }
-function extractDatePart(text) { return firstMatchWithIndex(text, [monthRe, dateRe, dayRe, relRe]); }
-function extractTimePart(text) { return firstMatchWithIndex(text, [timeRe]); }
-function combineWhen(datePart, timePart) { return (datePart && timePart) ? `${datePart} ${timePart}`.trim() : (datePart || timePart || '').trim(); }
 
-const NAME_IGNORE = /\b(hi|hello|hey|thanks|thank you|okay|ok|yes|yeah|yep)\b/i;
+function extractDatePart(text) {
+  // month name date (e.g. "Sep 12"), numeric date (e.g. "9/12"), weekday ("Friday"),
+  // relative ("tomorrow", "this Tue", "weekend")
+  return firstMatchWithIndex(text, [monthRe, dateRe, dayRe, relRe]);
+}
+
+function extractTimePart(text) {
+  // 4pm, 10:30 AM, 14:00, etc.
+  return firstMatchWithIndex(text, [timeRe]);
+}
+
+function combineWhen(datePart, timePart) {
+  if (datePart && timePart) return `${datePart} ${timePart}`.trim();
+  return (datePart || timePart || '').trim();
+}
+
 function nameFrom(text, idx) {
   const t = String(text || '').trim();
 
+  // Explicit phrases ("my name is", "call me", "it's", etc.)
   const m1 = namePhraseRe.exec(t);
   if (m1) return titleCase(m1[1]);
 
+  // Any single capitalized word not obviously a service/day/month
   const cap = /\b([A-Z][a-z]{1,29})\b/.exec(t);
   if (cap) {
     const candidate = cap[1].toLowerCase();
     if (
       !idx.variants.some(w => candidate.includes(w)) &&
       !/\b(mon|tue|wed|thu|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(candidate) &&
-      !/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\b/i.test(candidate) &&
-      !NAME_IGNORE.test(candidate)
-    ) return titleCase(cap[1]);
+      !/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\b/i.test(candidate)
+    ) {
+      return titleCase(cap[1]);
+    }
   }
 
+  // Fallback: first token that isn't a service word
   const m2 = /^([a-z][a-z' -]{1,29})(?:,|\s|$)/i.exec(t);
   if (m2) {
-    const cand = m2[1].toLowerCase();
-    if (!idx.variants.some(w => cand.includes(w)) && !NAME_IGNORE.test(cand)) return titleCase(m2[1]);
+    const candidate = m2[1].toLowerCase();
+    if (!idx.variants.some(w => candidate.includes(w))) return titleCase(m2[1]);
   }
+
   return '';
 }
 
@@ -142,13 +163,17 @@ function extractSlotsFromMessages(history, currentUserMsg, idx) {
     if (!text) return;
     if (!slots.service) slots.service = pickService(text, idx);
     if (!slots.name)    slots.name    = nameFrom(text, idx);
+
     const d = extractDatePart(text);
     const t = extractTimePart(text);
     if (!slots.whenDate && d) slots.whenDate = d;
     if (!slots.whenTime && t) slots.whenTime = t;
   }
 
-  for (const m of history) if (m.role === 'user') apply(m.content);
+  // prefer user turns in chronological order
+  for (const m of history) {
+    if (m.role === 'user') apply(m.content);
+  }
   if (currentUserMsg) apply(currentUserMsg);
 
   slots.when = combineWhen(slots.whenDate, slots.whenTime);
@@ -184,16 +209,28 @@ function defaultRuntime(e164To) {
 
 async function loadSpaRuntime(e164To) {
   let cfgs = null;
-  try { cfgs = await getConfigs(); }
-  catch (err) { console.error('getConfigs failed. Falling back to default sheet.', err.message); return defaultRuntime(e164To); }
+  try {
+    cfgs = await getConfigs(); // { bySpaId, byNumber }
+  } catch (err) {
+    console.error('getConfigs failed. Falling back to default sheet.', err.message);
+    return defaultRuntime(e164To);
+  }
 
   const bySpaId = (cfgs && cfgs.bySpaId) || {};
   const byNumber = (cfgs && cfgs.byNumber) || {};
 
   const normTo = normalize(e164To);
   let spaId = byNumber[e164To] || byNumber[normTo] || byNumber['+' + normTo];
-  if (!spaId) for (const [k, v] of Object.entries(byNumber)) { if (normalize(k) === normTo) { spaId = v; break; } }
-  if (!spaId || !bySpaId[spaId]) { console.warn('No spa mapping for number; using default runtime.'); return defaultRuntime(e164To); }
+  if (!spaId) {
+    for (const [k, v] of Object.entries(byNumber)) {
+      if (normalize(k) === normTo) { spaId = v; break; }
+    }
+  }
+
+  if (!spaId || !bySpaId[spaId]) {
+    console.warn('No spa mapping for number; using default runtime.');
+    return defaultRuntime(e164To);
+  }
 
   const spaConf = bySpaId[spaId];
   const DEFAULT_SHEET_ID = process.env.SHEET_ID || process.env.GOOGLE_SHEETS_ID;
@@ -209,7 +246,7 @@ async function loadSpaRuntime(e164To) {
   try { if (spaConf.services_json) services = JSON.parse(spaConf.services_json); } catch {}
 
   return {
-    spaId: spaConf.spa_id || 'default',
+    spaId,
     spaSheetKey,
     spaDisplayName,
     tz: spaConf.tz || process.env.DEFAULT_TIMEZONE || 'America/New_York',
@@ -223,15 +260,14 @@ async function loadSpaRuntime(e164To) {
   };
 }
 
-/* -------- History: pull last N user/assistant turns (skip status+compliance) ---
-// SpaConcierge_Ops.messages (15 cols):
-// [0]timestamp_iso,[1]spa_id,[2]direction,[3]to_e164,[4]from_e164,
-// [5]body,[6]status,[7]error_code,[8]message_sid,[9]msid,[10]campaign_id,
-// [11]segments,[12]price,[13]intent,[14]matched_keyword
-*/
+/* ---------------- History: pull last N turns for (to,from) --------- */
+// messages!A:J -> timestamp | spa | '-' | to | from | channel | status | body | error | notes
 async function fetchRecentHistory({ messagesSheetId, spaKey, to, from, limit = HISTORY_LIMIT, windowHours = HISTORY_WINDOW_HOURS }) {
   const sheets = await getSheetsRO();
-  const resp = await sheets.spreadsheets.values.get({ spreadsheetId: messagesSheetId, range: 'messages!A:O' });
+  const resp = await sheets.spreadsheets.values.get({
+    spreadsheetId: messagesSheetId,
+    range: 'messages!A:J',
+  });
   const rows = resp.data.values || [];
   if (!rows.length) return [];
 
@@ -240,30 +276,26 @@ async function fetchRecentHistory({ messagesSheetId, spaKey, to, from, limit = H
   const normTo = normalize(to);
   const normFrom = normalize(from);
 
-  for (let i = rows.length - 1; i >= 1 && out.length < limit * 2; i--) {
+  for (let i = rows.length - 1; i >= 0 && out.length < limit * 2; i--) {
     const r = rows[i];
-    if (!r || r.length < 6) continue;
+    if (!r || r.length < 8) continue;
 
-    const ts       = r[0] || '';
-    const spa      = r[1] || '';
-    const dir      = (r[2] || '').toString(); // inbound | outbound:* | inbound:optout | status | ...
-    const To       = normalize(r[3] || '');
-    const From     = normalize(r[4] || '');
-    const text     = (r[5] || '').toString().trim();
+    const ts     = r[0] || '';
+    const spa    = r[1] || '';
+    const To     = normalize(r[3] || '');
+    const From   = normalize(r[4] || '');
+    const status = (r[6] || '').toString();
+    const text   = (r[7] || '').toString().trim();
 
     if (spa !== spaKey) continue;
 
-    // Same conversation pair
     const matchesPair =
-      (To === normTo && From === normFrom) ||
-      (To === normFrom && From === normTo);
+      (To === normTo && From === normFrom) || // inbound
+      (To === normFrom && From === normTo);   // outbound
     if (!matchesPair) continue;
 
     if (!text) continue;
-
-    // Skip status + compliance keyword rows to keep memory clean
-    if (dir === 'status') continue;
-    if (/^inbound:(optout|optin|help)/i.test(dir)) continue;
+    if (/^inbound:(optout|optin|help)/i.test(status)) continue;
 
     const t = Date.parse(ts);
     if (isFinite(t)) {
@@ -272,98 +304,40 @@ async function fetchRecentHistory({ messagesSheetId, spaKey, to, from, limit = H
     }
 
     let role = null;
-    if (dir.startsWith('inbound'))  role = 'user';
-    else if (dir.startsWith('outbound')) role = 'assistant';
+    if (/^inbound/i.test(status))       role = 'user';
+    else if (/^outbound/i.test(status)) role = 'assistant';
     if (!role) continue;
 
     out.push({ role, content: text });
   }
+
   return out.reverse().slice(-limit);
-}
-
-/* ------------------------------ Dedupe ------------------------------ */
-async function hasRecentPendingBooking({ bookingsSheetId, phone, startTime, windowMin = DEDUPE_WINDOW_MIN }) {
-  try {
-    const sheets = await getSheetsRO();
-    const resp = await sheets.spreadsheets.values.get({
-      spreadsheetId: bookingsSheetId,
-      range: 'bookings!A:R', // 18 columns
-    });
-    const rows = resp.data.values || [];
-    if (rows.length <= 1) return false;
-
-    const since = Date.now() - windowMin * 60 * 1000;
-
-    const hdr = rows[0].map(h => (h || '').toLowerCase());
-    const idx = (name) => hdr.indexOf(name);
-
-    const tsIdx    = idx('timestamp_iso');
-    const phoneIdx = idx('phone');
-    const startIdx = idx('start_time');
-    const statusIdx= idx('status');
-
-    for (let i = 1; i < rows.length; i++) {
-      const r = rows[i];
-      const ts = Date.parse(r[tsIdx] || '');
-      const ph = (r[phoneIdx] || '').replace(/[^\d]/g, '');
-      const st = (r[startIdx] || '').trim();
-      const status = (r[statusIdx] || '').toLowerCase();
-      if (isFinite(ts) && ts >= since && status === 'pending') {
-        if (ph.endsWith(normalize(phone)) && st === (startTime || '')) return true;
-      }
-    }
-  } catch (e) {
-    console.error('Dedupe check failed:', e.message);
-  }
-  return false;
 }
 
 /* -------------------------------- Handler --------------------------- */
 exports.handler = async (event) => {
-  if (event.httpMethod === 'GET') return { statusCode: 200, body: 'OK' };
-
-  const params = new URLSearchParams(event.body || '');
-  const now = new Date().toISOString();
-
-  // Status-callback branch
-  const maybeStatus = params.get('MessageStatus') || params.get('SmsStatus');
-  if (maybeStatus) {
-    const to   = params.get('To')   || '';
-    const from = params.get('From') || '';
-    let runtime = defaultRuntime(to);
-    try { const r = await loadSpaRuntime(to); if (r && r.messagesSheetId) runtime = r; } catch (e) { console.error('loadSpaRuntime (status) error; using default:', e.message); }
-
-    const messageSid = params.get('MessageSid') || '';
-    const errCode    = params.get('ErrorCode') || '';
-    const campaignId = params.get('CampaignSid') || params.get('MessagingServiceSid') || '';
-
-    try {
-      await appendRow({
-        sheetId: runtime.messagesSheetId,
-        tabName: 'messages',
-        row: [now, runtime.spaId, 'status', to, from, '', maybeStatus, errCode, messageSid, runtime.msid || '', campaignId, '', '', '', '']
-      });
-    } catch (e) { console.error('Status log failed:', e.message); }
-
-    return { statusCode: 200, body: '' };
+  // Simple GET health check (no secrets leaked)
+  if (event.httpMethod === 'GET') {
+    return { statusCode: 200, body: 'OK' };
   }
 
-  // Regular inbound message
-  const from = params.get('From') || '';
-  const to   = params.get('To')   || '';
+  const params = new URLSearchParams(event.body || '');
+  const from = params.get('From') || ''; // customer (E.164)
+  const to   = params.get('To')   || ''; // our Twilio number (E.164)
   const body = (params.get('Body') || '').trim();
-  const inboundSid = params.get('MessageSid') || '';
-  const segments   = params.get('NumSegments') || '';
-  const price      = params.get('Price') || '';
-  const campaignId = params.get('CampaignSid') || params.get('MessagingServiceSid') || '';
+  const now = new Date().toISOString();
 
+  // Load per-SPA runtime (with safe fallback)
   let runtime = defaultRuntime(to);
-  try { const r = await loadSpaRuntime(to); if (r && r.messagesSheetId) runtime = r; }
-  catch (e) { console.error('loadSpaRuntime error; using default runtime:', e.message); }
+  try {
+    const r = await loadSpaRuntime(to);
+    if (r && r.messagesSheetId) runtime = r;
+  } catch (e) {
+    console.error('loadSpaRuntime error; using default runtime:', e.message);
+  }
 
   const {
-    spaId,               // <— canonical id to log
-    spaSheetKey,         // display-ish
+    spaSheetKey,
     spaDisplayName,
     messagesSheetId,
     bookingsSheetId,
@@ -374,100 +348,38 @@ exports.handler = async (event) => {
   const services = svcFromCfg || DEFAULT_SERVICES;
   const svcIndex = makeServiceIndex(services);
 
-  // 1) Log inbound (15-col schema)
+  /* 1) Log inbound (best-effort) */
   try {
     await appendRow({
       sheetId: messagesSheetId,
       tabName: 'messages',
-      row: [now, spaId, 'inbound', to, from, body, 'received', '', inboundSid, runtime.msid || '', campaignId, segments, price, '', '']
+      row: [now, spaSheetKey, '-', to, from, 'sms', 'inbound', body, 'N/A', '']
     });
   } catch (e) { console.error('Inbound log failed:', e.message); }
 
-  // 2) Compliance (log + let Twilio handle reply)
+  /* 2) Compliance keywords: log & let Twilio Advanced Opt-Out reply */
   if (OPT_OUT_KEYWORDS.test(body) || OPT_IN_KEYWORDS.test(body) || HELP_KEYWORDS.test(body)) {
-    let complianceType = 'compliance', matched = '';
-    if (OPT_OUT_KEYWORDS.test(body)) { complianceType = 'inbound:optout'; matched = body; }
-    if (OPT_IN_KEYWORDS.test(body))  { complianceType = 'inbound:optin';  matched = body; }
-    if (HELP_KEYWORDS.test(body))    { complianceType = 'inbound:help';   matched = body; }
+    let complianceType = 'compliance';
+    if (OPT_OUT_KEYWORDS.test(body)) complianceType = 'optout';
+    if (OPT_IN_KEYWORDS.test(body))  complianceType = 'optin';
+    if (HELP_KEYWORDS.test(body))    complianceType = 'help';
 
     try {
       await appendRow({
         sheetId: messagesSheetId,
         tabName: 'messages',
-        row: [now, spaId, complianceType, to, from, body, 'received', '', inboundSid, runtime.msid || '', campaignId, segments, price, '', matched]
+        row: [now, spaSheetKey, '-', to, from, 'sms', `inbound:${complianceType}`, body, 'N/A', '']
       });
     } catch (e) { console.error('Compliance log failed:', e.message); }
 
-    return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: new twilio.twiml.MessagingResponse().toString() };
+    return {
+      statusCode: 200,
+      headers: { 'Content-Type': 'application/xml' },
+      body: new twilio.twiml.MessagingResponse().toString()
+    };
   }
 
-  // 3) Explicit CONFIRM booking path (only here we write bookings)
-  if (CONFIRM_RE.test(body)) {
-    let reply, kind = 'auto';
-    try {
-      const history = await fetchRecentHistory({ messagesSheetId, spaKey: spaId, to, from });
-      const slots = extractSlotsFromMessages(history, /*currentUserMsg*/'', svcIndex);
-      const missing = missingFields(slots);
-
-      if (missing.length) {
-        reply = `Almost there — I still need your ${missing.join(' & ')} to place the hold.`;
-      } else {
-        const dup = await hasRecentPendingBooking({ bookingsSheetId, phone: from, startTime: slots.when, windowMin: DEDUPE_WINDOW_MIN });
-        if (dup) {
-          reply = `You’re already on our list for ${slots.service} ${slots.when}. If you need changes, just tell me what to change.`;
-        } else {
-          try {
-            await appendRow({
-              sheetId: bookingsSheetId,
-              tabName: 'bookings',
-              row: [
-                now,                 // timestamp_iso
-                '',                  // booking_id
-                spaId,               // spa_id (canonical)
-                'sms',               // channel
-                slots.name,          // name
-                from,                // phone
-                '',                  // email
-                slots.service,       // service
-                slots.when,          // start_time
-                tz || '',            // timezone
-                'sms',               // source
-                '',                  // notes
-                '',                  // staff
-                'pending',           // status
-                '',                  // price
-                '',                  // revenue
-                '',                  // external_apt_id
-                ''                   // utm_campaign
-              ]
-            });
-            reply = `Got it — I’ll hold a spot for ${slots.service} ${slots.when}. We’ll text back to confirm availability.`;
-          } catch (e) {
-            console.error('Pending booking log failed:', e.message);
-            reply = "I couldn't place the hold just now, but I’ve saved your details and will follow up shortly.";
-          }
-        }
-      }
-    } catch (e) {
-      console.error('Confirm flow error:', e.message);
-      reply = 'Thanks! I’m saving your request and will confirm shortly.';
-    }
-
-    const twiml = new twilio.twiml.MessagingResponse();
-    twiml.message(reply);
-
-    try {
-      await appendRow({
-        sheetId: messagesSheetId,
-        tabName: 'messages',
-        row: [now, spaId, 'outbound:auto', to, from, reply, 'queued', '', '', runtime.msid || '', '', '', '', 'confirm']
-      });
-    } catch (e) { console.error('Outbound log failed:', e.message); }
-
-    return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
-  }
-
-  // 4) Decide reply (AI) + prompt to CONFIRM
+  /* 3) Decide reply */
   let reply;
   let kind = 'auto';
 
@@ -478,15 +390,21 @@ exports.handler = async (event) => {
   } else {
     kind = 'ai';
 
+    // Pull recent history (to/from pair) and extract slots
     let history = [];
-    try { history = await fetchRecentHistory({ messagesSheetId, spaKey: spaId, to, from }); }
-    catch (e) { console.error('History fetch failed:', e.message); }
+    try {
+      history = await fetchRecentHistory({
+        messagesSheetId,
+        spaKey: spaSheetKey,
+        to, from
+      });
+    } catch (e) { console.error('History fetch failed:', e.message); }
 
     const slots = extractSlotsFromMessages(history, body, svcIndex);
     const missing = missingFields(slots);
-    const serviceLine = (services || []).map(s => s.price ? `${s.key} (~$${s.price})` : s.key).join(', ');
+    const serviceLine = services.map(s => s.price ? `${s.key} (~$${s.price})` : s.key).join(', ');
 
-    const systemPrompt =
+   const systemPrompt =
 `You are a helpful receptionist for ${spaDisplayName}.
 Tone: friendly, concise, professional.
 You DO NOT have live calendar access; never promise confirmed availability.
@@ -503,21 +421,49 @@ Missing: ${missing.length ? missing.join(', ') : 'none'}
 
 Behavior:
 - If any piece is missing, ask ONLY for the missing piece(s) (one compact question).
-- If all pieces are present, summarize and ask them to reply "CONFIRM" to place a hold. Example:
-  “Great, I have you for a {service} on {date} at {time}. Reply CONFIRM to place a hold.”
-- Keep replies to 1–3 SMS-length sentences.
-- Once you have the service, date, time, and name, tell the guest:
-  “I’ve got your [service] on [date/time]. Please reply CONFIRM to hold this request.”
-- Do NOT log a booking until the guest replies CONFIRM.`;
+- If all pieces are present, acknowledge and say you'll hold the request and someone will confirm shortly (no fake confirmations).
+- Keep replies to 1–3 SMS-length sentences.`;
 
     try {
       const completion = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         temperature: 0.3,
-        messages: [{ role: "system", content: systemPrompt }, ...history, { role: "user", content: body }]
+        messages: [
+          { role: "system", content: systemPrompt },
+          ...history,
+          { role: "user", content: body }
+        ]
       });
       reply = (completion.choices?.[0]?.message?.content || '').trim();
       if (!reply) throw new Error('Empty AI reply');
+
+      // If all slots present → log a pending booking row
+      if (missing.length === 0) {
+        try {
+          await appendRow({
+            sheetId: bookingsSheetId,
+            tabName: 'bookings',
+            row: [
+              now,                 // timestamp_iso
+              '',                  // booking_id
+              spaSheetKey,         // spa_id (use spa_id if you prefer)
+              'sms',               // channel
+              slots.name,          // name
+              from,                // phone
+              '',                  // email
+              slots.service,       // service
+              slots.when,          // start_time (free-form for now)
+              tz || '',            // timezone
+              'sms',               // source
+              '',                  // notes
+              '',                  // staff
+              'pending',           // status
+              '',                  // price
+              ''                   // revenue
+            ]
+          });
+        } catch (e) { console.error('Pending booking log failed:', e.message); }
+      }
     } catch (e) {
       console.error('OpenAI error:', e.message);
       kind = 'auto';
@@ -525,7 +471,7 @@ Behavior:
     }
   }
 
-  // 5) TwiML + log outbound
+  /* 4) TwiML + log outbound */
   const twiml = new twilio.twiml.MessagingResponse();
   twiml.message(reply);
 
@@ -533,9 +479,13 @@ Behavior:
     await appendRow({
       sheetId: messagesSheetId,
       tabName: 'messages',
-      row: [now, spaId, `outbound:${kind}`, to, from, reply, 'queued', '', '', runtime.msid || '', '', '', '', (kind === 'ai' ? 'ai' : ''), '']
+      row: [now, spaSheetKey, '-', to, from, 'sms', `outbound:${kind}`, reply, 'N/A', '']
     });
   } catch (e) { console.error('Outbound log failed:', e.message); }
 
-  return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
+  return {
+    statusCode: 200,
+    headers: { 'Content-Type': 'application/xml' },
+    body: twiml.toString()
+  };
 };
