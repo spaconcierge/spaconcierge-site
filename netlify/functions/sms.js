@@ -51,6 +51,7 @@ const HISTORY_LIMIT        = Number(process.env.HISTORY_LIMIT  || 20); // more m
 const HISTORY_WINDOW_HOURS = Number(process.env.HISTORY_HOURS || (24*7)); // 7 days
 
 /* ----------------------- Compliance keywords ------------------------ */
+const CHANGE_KEYWORDS = /\b(change|instead|another|different|reschedule|no,|actually)\b/i;
 const OPT_OUT_KEYWORDS = /^(stop|cancel|end|optout|quit|revoke|stopall|unsubscribe)$/i;
 const OPT_IN_KEYWORDS  = /^(start|unstop|yes)$/i;
 const HELP_KEYWORDS    = /^(help)$/i;
@@ -621,13 +622,22 @@ exports.handler = async (event) => {
     }
   }
 
-  // Merge heuristics + LLM (prefer heuristics if present)
-  const merged = {
-    service : slotsHeu.service  || slotsLLM.service,
-    dateHint: slotsHeu.dateHint || slotsLLM.dateHint,
-    timeHint: slotsHeu.timeHint || slotsLLM.timeHint,
-    name    : slotsHeu.name     || slotsLLM.name
+ let merged = {
+  service : slotsHeu.service  || slotsLLM.service,
+  dateHint: slotsHeu.dateHint || slotsLLM.dateHint,
+  timeHint: slotsHeu.timeHint || slotsLLM.timeHint,
+  name    : slotsHeu.name     || slotsLLM.name
+};
+
+// If the user explicitly wants to change, ignore history and re-extract from *this* message only
+if (CHANGE_KEYWORDS.test(body)) {
+  merged = {
+    service : pickService(body, svcIndex),
+    dateHint: extractDateHint(body),
+    timeHint: extractTimeHint(body),
+    name    : nameFrom(body, svcIndex)
   };
+}
 
   const normDate = normalizeDateHint(merged.dateHint, tz);
   const normTime = normalizeTimeHint(merged.timeHint);
@@ -637,17 +647,23 @@ exports.handler = async (event) => {
   if (!normTime)       missing.push('time');
   if (!merged.name)    missing.push('name');
 
-  // Ask ONLY for missing pieces
-  let reply, kind = 'ai';
-  if (missing.length) {
-    const systemPrompt =
+ // Ask ONLY for missing pieces
+let reply, kind = 'ai';
+if (missing.length) {
+  const systemPrompt =
 `You are a helpful receptionist for ${spaDisplayName}.
 Ask ONLY for the missing items (${missing.join(', ')}). Keep it to 1–2 short SMS sentences.
-Never promise availability.`;
-    const content = await openaiChat(
-      [{ role: 'system', content: systemPrompt }, ...history, { role: 'user', content: body }],
-      { temperature: 0.2 }
-    );
+Never promise availability.
+If the user says "change", "instead", "actually", "another", etc., discard any prior proposal
+and rebuild based on their latest message only. Always prioritize the latest user message over earlier history.`;
+    const chatHistory = CHANGE_KEYWORDS.test(body)
+  ? []   // ignore earlier turns if user says "change", "instead", etc.
+  : history;
+
+const content = await openaiChat(
+  [{ role: 'system', content: systemPrompt }, ...chatHistory, { role: 'user', content: body }],
+  { temperature: 0.2 }
+);
     reply = content || 'Got it — could you share the missing details? (service, date, time, or your name).';
 
     const twiml = new twilio.twiml.MessagingResponse();
