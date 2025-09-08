@@ -52,14 +52,14 @@ async function advanceBookingFSM({ runtime, from, to, body, activeBookings, serv
     session.lastUpdatedISO = nowISO;
     bookingStateMemo.set(key, session);
     await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
-    return { reply: 'What name should I put this under?' };
+    return { reply: 'Got it! Can I have your first name so I can set this up?' };
   }
   if (!session.data.ymd || !session.data.hhmm) {
     session.state = 'awaiting_datetime';
     session.lastUpdatedISO = nowISO;
     bookingStateMemo.set(key, session);
     await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
-    return { reply: 'What date and time would you like?' };
+    return { reply: 'Great — what date and time work best for you?' };
   }
   // Validate hours before asking service
   if (!withinHours(session.data.ymd, session.data.hhmm, tz, hoursMap)) {
@@ -86,7 +86,7 @@ async function advanceBookingFSM({ runtime, from, to, body, activeBookings, serv
     bookingStateMemo.set(key, session);
     await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
     const offered = (runtime.services || DEFAULT_SERVICES).map(s => s.key).join(', ');
-    return { reply: `Which service? We offer: ${offered}.` };
+    return { reply: `Almost done! Which service would you like to book? We offer ${offered}.` };
   }
 
   // Ready to confirm — duplicate guard first
@@ -109,6 +109,44 @@ async function advanceBookingFSM({ runtime, from, to, body, activeBookings, serv
     return { reply: dupMsg };
   }
 
+  // Final confirmation guard: validate fields strictly
+  const offeredKeys = (runtime.services || DEFAULT_SERVICES).map(s => s.key);
+  if (!session.data.name || NAME_STOPWORDS.has(String(session.data.name || '').toLowerCase())) {
+    session.state = 'awaiting_name';
+    session.data.name = '';
+    session.lastUpdatedISO = nowISO;
+    bookingStateMemo.set(key, session);
+    await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
+    return { reply: 'Could I get your first name to put the booking under?' };
+  }
+  if (!withinHours(session.data.ymd, session.data.hhmm, tz, hoursMap)) {
+    const y = session.data.ymd;
+    let windowText = '8:00–20:00';
+    if (hoursMap && y) {
+      const dow = new Intl.DateTimeFormat('en-US', { weekday:'short', timeZone: tz })
+        .format(new Date(`${y}T00:00:00Z`)).toLowerCase().slice(0,3);
+      const di = { sun:0, mon:1, tue:2, wed:3, thu:4, fri:5, sat:6 }[dow];
+      const cfg = hoursMap?.[di];
+      windowText = cfg ? `${cfg.open}–${cfg.close} ${tz}` : '8:00–20:00';
+    }
+    session.state = 'awaiting_datetime';
+    session.data.ymd = '';
+    session.data.hhmm = '';
+    session.lastUpdatedISO = nowISO;
+    bookingStateMemo.set(key, session);
+    await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
+    return { reply: `We’re closed at that time. Could you pick a slot between ${windowText}?` };
+  }
+  if (!offeredKeys.includes(String(session.data.service || ''))) {
+    session.state = 'awaiting_service';
+    session.data.service = '';
+    session.lastUpdatedISO = nowISO;
+    bookingStateMemo.set(key, session);
+    await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
+    const offered = offeredKeys.join(', ');
+    return { reply: `Sorry, we don’t offer that service here. Our services are: ${offered}. Which one would you like?` };
+  }
+
   // Persist session state
   session.state = 'awaiting_confirm';
   session.lastUpdatedISO = nowISO;
@@ -116,7 +154,7 @@ async function advanceBookingFSM({ runtime, from, to, body, activeBookings, serv
   await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
 
   // Log a confirm_request so the CONFIRM handler can find it
-  const confirmText = `Just to make sure I’ve got this right: ${session.data.name} — ${session.data.service} on ${whenNice}. If that looks perfect, just reply CONFIRM. Or say CHANGE and describe what you want to adjust.`;
+  const confirmText = `Just to confirm — booking for ${session.data.name}: ${session.data.service} on ${whenNice}. If that’s correct, please reply CONFIRM. Or reply CHANGE if you’d like to adjust.`;
 
   try {
     await appendRow({
@@ -291,7 +329,11 @@ function makeServiceIndex(services) {
 }
 function pickService(text, idx) {
   const t = String(text || '').toLowerCase();
-  for (const v of idx.variants) if (t.includes(v)) return idx.variantToKey.get(v) || '';
+  for (const v of idx.variants) {
+    const escaped = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`(^|[^a-z])${escaped}([^a-z]|$)`);
+    if (re.test(t)) return idx.variantToKey.get(v) || '';
+  }
   return '';
 }
 
@@ -312,7 +354,7 @@ const relRe   = /\b(?:today|tomorrow|tmrw|this (?:mon|tue|wed|thu|fri|sat|sun|we
 
 // Name phrases (allow multiword names and O’…/De La …)
 const namePhraseRe  = /\b(?:my name(?:'s)? is|name is|i am|i'm|im|this is|call me|it's)\s+([A-Z][A-Za-z'’\-]{1,29}(?:\s+[A-Z][A-Za-z'’\-]{1,29}){0,2})\b/;
-const NAME_STOPWORDS = new Set(['hi','hey','hello','thanks','thank','ok','okay','yeah','yep','sure','please']);
+const NAME_STOPWORDS = new Set(['hi','hey','hello','thanks','thank','ok','okay','yeah','yep','sure','please','it','no','can']);
 
 function firstMatchWithIndex(text, regexes) {
   const t = String(text || '');
@@ -356,7 +398,10 @@ function extractForName(text) {
   ];
   for (const re of patterns) {
     const m = re.exec(t);
-    if (m) return titleCase(m[1]);
+    if (m) {
+      const nm = titleCase(m[1]);
+      if (!NAME_STOPWORDS.has(nm.toLowerCase())) return nm;
+    }
   }
   return '';
 }
@@ -464,15 +509,15 @@ function parseHours(hoursJson) {
   return map;
 }
 function withinHours(ymd, hhmm, tz, hoursMap) {
-  if (!hoursMap) return true;
   if (!ymd || !hhmm) return true;
   const dt = new Date(`${ymd}T${hhmm}:00Z`);
   const wd = new Intl.DateTimeFormat('en-US', { weekday:'short', timeZone: tz })
                .format(dt).toLowerCase().slice(0,3);
   const D = { sun:0, mon:1, tue:2, wed:3, thu:4, fri:5, sat:6 };
-  const cfg = hoursMap[D[wd]];
-  if (!cfg) return false;
-  return hhmm >= cfg.open && hhmm <= cfg.close;
+  const cfg = hoursMap ? hoursMap[D[wd]] : null;
+  const defaultHours = { open: '08:00', close: '20:00' };
+  const window = cfg || defaultHours;
+  return hhmm >= window.open && hhmm <= window.close;
 }
 function niceWhen(ymd, hhmm, tz) {
   if (!ymd) return '';
