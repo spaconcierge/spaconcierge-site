@@ -1,27 +1,54 @@
 // netlify/functions/sms.js
-// ----------------------------------------------------------------------------
-// Preserves existing behavior (compliance logging, history memory, per-SPA
-// config, bookings logging) AND adds:
-//  - Slot extraction (service, date, time, name)
-//  - Explicit confirmation gate ("CONFIRM" / "C") before writing bookings
-//  - "Pending proposal" marker row in messages (JSON in notes col) and
-//    a confirm handler that reads it and writes a single booking row
-//  - Relative date resolution using SPA timezone
-//  - Business hours guard using hours_json (if present)
-// ----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// Preserves your existing behavior AND adds:
+//  - Model upgrade w/ fallback (gpt-4o -> gpt-4o-mini)
+//  - Longer history window (env-tunable) for better context
+//  - Smarter name extraction + LLM fallback when uncertain
+//  - Relative date => explicit YYYY-MM-DD in SPA timezone
+//  - Confirmation gate ("CONFIRM"/"C") before writing to bookings
+//  - Hours guard using hours_json (if present)
+// -----------------------------------------------------------------------------
 
-const { appendRow } = require('./_sheets');          // writes a row
-const { spaForNumber } = require('./_spa');          // legacy display name fallback
-const { getConfigs } = require('./_lib/config');     // loads spas tab
+const { appendRow } = require('./_sheets');      // writes a row
+const { spaForNumber } = require('./_spa');      // legacy display name fallback
+const { getConfigs } = require('./_lib/config'); // loads spas tab
 const twilio = require('twilio');
 const { google } = require('googleapis');
 let OpenAI = require('openai'); OpenAI = OpenAI.default || OpenAI;
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 8000 });
 
-/* ----------------------------- Tunables ----------------------------- */
-const HISTORY_LIMIT        = Number(process.env.HISTORY_LIMIT  || 10);
-const HISTORY_WINDOW_HOURS = Number(process.env.HISTORY_HOURS || 48);
+/* ------------------------------ Models ------------------------------ */
+const MODEL_PRIMARY  = process.env.OPENAI_MODEL_PRIMARY  || 'gpt-4o';
+const MODEL_FALLBACK = process.env.OPENAI_MODEL_FALLBACK || 'gpt-4o-mini';
+
+async function openaiChat(messages, opts = {}) {
+  try {
+    const r = await openai.chat.completions.create({
+      model: MODEL_PRIMARY,
+      ...opts,
+      messages
+    });
+    return r.choices?.[0]?.message?.content?.trim() || '';
+  } catch (e) {
+    console.error('OpenAI primary failed:', e.message);
+    try {
+      const r2 = await openai.chat.completions.create({
+        model: MODEL_FALLBACK,
+        ...opts,
+        messages
+      });
+      return r2.choices?.[0]?.message?.content?.trim() || '';
+    } catch (e2) {
+      console.error('OpenAI fallback failed:', e2.message);
+      return '';
+    }
+  }
+}
+
+/* ------------------------------ Tunables ---------------------------- */
+const HISTORY_LIMIT        = Number(process.env.HISTORY_LIMIT  || 20); // more memory
+const HISTORY_WINDOW_HOURS = Number(process.env.HISTORY_HOURS || (24*7)); // 7 days
 
 /* ----------------------- Compliance keywords ------------------------ */
 const OPT_OUT_KEYWORDS = /^(stop|cancel|end|optout|quit|revoke|stopall|unsubscribe)$/i;
@@ -85,16 +112,20 @@ function pickService(text, idx) {
 }
 
 /* -------------------------- Slot extraction ------------------------- */
-const timeRe  = /\b(?:[01]?\d|2[0-3])(?::\d{2})?\s?(?:am|pm)?\b/i;
+// More permissive time; better weekday/month patterns; robust name phrases
+const timeRe  = /\b(?:[01]?\d|2[0-3])(?::\d{2})?\s*(?:am|pm)?\b/i;
 const dayRe   = /\b(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b/i;
 const dateRe  = /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/;
 const monthRe = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?\b/i;
 const relRe   = /\b(?:today|tomorrow|tmrw|this (?:mon|tue|wed|thu|fri|sat|sun|weekend)|weekend)\b/i;
-const namePhraseRe  = /\b(?:my name(?:'s)? is|name is|i am|i'm|im|this is|call me|it's)\s+([A-Z][a-z' -]{1,29})\b/;
+
+// Name phrases: allow 1–3 tokens (O’Connor, De La Cruz, etc.)
+const namePhraseRe  = /\b(?:my name(?:'s)? is|name is|i am|i'm|im|this is|call me|it's)\s+([A-Z][A-Za-z'’\-]{1,29}(?:\s+[A-Z][A-Za-z'’\-]{1,29}){0,2})\b/;
+const NAME_STOPWORDS = new Set(['hi','hey','hello','thanks','thank','ok','okay','yeah','yep','sure','please']);
 
 function firstMatchWithIndex(text, regexes) {
   const t = String(text || '');
-  let best = null; // {val, idx}
+  let best = null;
   for (const re of regexes) {
     const m = re.exec(t);
     if (m && m.index >= 0) {
@@ -110,23 +141,20 @@ function extractTimeHint(text) { return firstMatchWithIndex(text, [timeRe]); }
 function nameFrom(text, idx) {
   const t = String(text || '').trim();
   const m1 = namePhraseRe.exec(t);
-  if (m1) return titleCase(m1[1]);
+  if (m1) {
+    const nm = titleCase(m1[1]);
+    if (!NAME_STOPWORDS.has(nm.toLowerCase())) return nm;
+  }
 
-  // Any single capitalized word not obviously a service/day/month
+  // “Capitalized word” fallback (but avoid services/days/months/greetings)
   const cap = /\b([A-Z][a-z]{1,29})\b/.exec(t);
   if (cap) {
-    const candidate = cap[1].toLowerCase();
+    const nm = cap[1];
+    const candidate = nm.toLowerCase();
     const isDay = /\b(mon|tue|wed|thu|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(candidate);
     const isMon = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\b/i.test(candidate);
     const isServiceish = idx.variants.some(w => candidate.includes(w));
-    if (!isDay && !isMon && !isServiceish) return titleCase(cap[1]);
-  }
-
-  // Fallback: first token that isn't a service word
-  const m2 = /^([a-z][a-z' -]{1,29})(?:,|\s|$)/i.exec(t);
-  if (m2) {
-    const candidate = m2[1].toLowerCase();
-    if (!idx.variants.some(w => candidate.includes(w))) return titleCase(m2[1]);
+    if (!isDay && !isMon && !isServiceish && !NAME_STOPWORDS.has(candidate)) return titleCase(nm);
   }
   return '';
 }
@@ -141,10 +169,9 @@ function nowPartsInTZ(tz) {
   return {
     year: +parts.year, month: +parts.month, day: +parts.day,
     hour: +parts.hour, minute: +parts.minute, second: +parts.second,
-    weekday: new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: tz }).format(new Date())
   };
 }
-function ymdToDate(yyyy, mm, dd) { return new Date(Date.UTC(yyyy, mm-1, dd)); } // compare only by date
+function ymdToDate(yyyy, mm, dd) { return new Date(Date.UTC(yyyy, mm-1, dd)); }
 function formatYMD(yyyy, mm, dd) { return `${String(yyyy).padStart(4,'0')}-${String(mm).padStart(2,'0')}-${String(dd).padStart(2,'0')}`; }
 const DOW = { sun:0, mon:1, tue:2, wed:3, thu:4, fri:5, sat:6 };
 
@@ -161,7 +188,6 @@ function normalizeDateHint(hint, tz) {
     return formatYMD(d.getUTCFullYear(), d.getUTCMonth()+1, d.getUTCDate());
   }
   if (/weekend/.test(hint)) {
-    // next Saturday
     const d = ymdToDate(year, month, day);
     const delta = (DOW.sat - d.getUTCDay() + 7) % 7 || 7;
     d.setUTCDate(d.getUTCDate()+delta);
@@ -175,25 +201,25 @@ function normalizeDateHint(hint, tz) {
     d.setUTCDate(d.getUTCDate()+delta);
     return formatYMD(d.getUTCFullYear(), d.getUTCMonth()+1, d.getUTCDate());
   }
-  // month name (e.g., "Sep 12" or "September 12, 2025")
   const m1 = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+(\d{1,2})(?:,\s*(\d{4}))?/i.exec(hint);
   if (m1) {
     const monthIdx = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,sept:9,oct:10,nov:11,dec:12}[m1[1].slice(0,3).toLowerCase()];
     const dd = +m1[2];
-    const yy = m1[3] ? +m1[3] : year;
+    let yy = m1[3] ? +m1[3] : year;
+    // if in the past this year, roll to next
+    const candidate = ymdToDate(yy, monthIdx, dd);
+    if (candidate < today) yy += 1;
     return formatYMD(yy, monthIdx, dd);
   }
-  // numeric "MM/DD[/YY]"
   const m2 = /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/.exec(hint);
   if (m2) {
     let mm = +m2[1], dd = +m2[2], yy = m2[3] ? +m2[3] : year;
     if (yy < 100) yy += 2000;
-    // if already passed this year, roll to next year
     const candidate = ymdToDate(yy, mm, dd);
     if (candidate < today) yy += 1;
     return formatYMD(yy, mm, dd);
   }
-  return ''; // unrecognized
+  return '';
 }
 function normalizeTimeHint(hint) {
   if (!hint) return '';
@@ -210,39 +236,41 @@ function normalizeTimeHint(hint) {
 
 /* ----------------------- Hours parsing / check ---------------------- */
 function parseHours(hoursJson) {
-  // supports keys: "mon-fri", "sat", "sun", "daily", etc. with "HH:MM-HH:MM" or null
   if (!hoursJson) return null;
   let obj = null;
   try { obj = typeof hoursJson === 'string' ? JSON.parse(hoursJson) : hoursJson; } catch { return null; }
-  const map = { 0:null,1:null,2:null,3:null,4:null,5:null,6:null }; // 0=Sun..6=Sat
+  const map = { 0:null,1:null,2:null,3:null,4:null,5:null,6:null };
   const apply = (rangeStr, days) => {
     if (!rangeStr) return days.forEach(d => map[d] = null);
     const mm = /(\d{2}:\d{2})-(\d{2}:\d{2})/.exec(rangeStr);
     if (!mm) return;
     days.forEach(d => map[d] = { open: mm[1], close: mm[2] });
   };
+  const D = {mon:1,tue:2,wed:3,thu:4,fri:5,sat:6,sun:0};
   for (const [k,v] of Object.entries(obj)) {
-    const key = k.toLowerCase();
+    const key = k.toLowerCase().replace(/\s+/g,'');
     if (key === 'daily') { apply(v, [0,1,2,3,4,5,6]); continue; }
     const one = key.match(/^(mon|tue|wed|thu|fri|sat|sun)$/);
-    const span = key.match(/^(mon|tue|wed|thu|fri|sat|sun)\s*-\s*(mon|tue|wed|thu|fri|sat|sun)$/);
-    if (one) apply(v, [DOW[one[1]]]);
+    const span = key.match(/^(mon|tue|wed|thu|fri|sat|sun)\-(mon|tue|wed|thu|fri|sat|sun)$/);
+    if (one)      apply(v, [D[one[1]]]);
     else if (span) {
-      const a = DOW[span[1]], b = DOW[span[2]];
-      const days = []; for (let i=a; i!== (b+1)%7; i=(i+1)%7) days.push(i); days.push(b);
+      const a = D[span[1]], b = D[span[2]];
+      const days = [];
+      let x = a; days.push(x);
+      while (x !== b) { x = (x+1)%7; days.push(x); }
       apply(v, days);
     }
   }
   return map;
 }
 function withinHours(ymd, hhmm, tz, hoursMap) {
-  if (!hoursMap) return true; // no hours set => allow
+  if (!hoursMap) return true;
   if (!ymd || !hhmm) return true;
-  const d = new Date(`${ymd}T${hhmm}:00Z`); // compare by local weekday in tz
-  // compute weekday in tz
-  const wd = new Intl.DateTimeFormat('en-US', { weekday:'short', timeZone: tz }).format(d).toLowerCase().slice(0,3);
-  const dow = DOW[wd];
-  const cfg = hoursMap[dow];
+  const dt = new Date(`${ymd}T${hhmm}:00Z`);
+  const wd = new Intl.DateTimeFormat('en-US', { weekday:'short', timeZone: tz })
+               .format(dt).toLowerCase().slice(0,3);
+  const D = { sun:0, mon:1, tue:2, wed:3, thu:4, fri:5, sat:6 };
+  const cfg = hoursMap[D[wd]];
   if (!cfg) return false;
   return hhmm >= cfg.open && hhmm <= cfg.close;
 }
@@ -381,16 +409,14 @@ async function fetchRecentHistory({ messagesSheetId, spaKey, to, from, limit = H
 }
 
 /* --------------- Pending proposal marker: find & create ------------- */
+async function getSheetsROValues(spreadsheetId, range) {
+  const s = await getSheetsRO();
+  const r = await s.spreadsheets.values.get({ spreadsheetId, range });
+  return (r.data.values || []);
+}
 async function findPendingProposal({ messagesSheetId, spaKey, to, from }) {
-  // Scan recent rows for an outbound:confirm_request with JSON in notes
-  const sheets = await getSheetsRO();
-  const resp = await sheets.spreadsheets.values.get({
-    spreadsheetId: messagesSheetId,
-    range: 'messages!A:J',
-  });
-  const rows = resp.data.values || [];
+  const rows = await getSheetsROValues(messagesSheetId, 'messages!A:J');
   const normTo = normalize(to), normFrom = normalize(from);
-
   for (let i = rows.length - 1; i >= 0; i--) {
     const r = rows[i];
     if (!r || r.length < 10) continue;
@@ -414,6 +440,38 @@ function buildProposalJSON({ name, service, date, time, tz }) {
   return JSON.stringify({ name, service, date, time, tz });
 }
 
+/* ----------------------- LLM slot extraction pass ------------------- */
+// When heuristics miss, ask the model to extract structured fields from context.
+async function llmExtractSlots({ spaDisplayName, tz, services, history, userText }) {
+  const now = nowPartsInTZ(tz);
+  const svcKeys = (services || []).map(s => s.key);
+  const sys =
+`You are a receptionist for ${spaDisplayName}. Extract fields from the conversation.
+Return ONLY JSON with keys: service, date_text, time_text, name.
+- service: one of [${svcKeys.join(', ')}] if possible; else "".
+- date_text: user's hint for date (e.g., "tomorrow", "Sep 12", "Friday"); else "".
+- time_text: user's hint for time (e.g., "2pm", "14:30"); else "".
+- name: first + optional last name if stated; else "".
+Assume current local date/time: ${now.year}-${String(now.month).padStart(2,'0')}-${String(now.day).padStart(2,'0')} ${String(now.hour).padStart(2,'0')}:${String(now.minute).padStart(2,'0')} (${tz}).`;
+  const msgs = [
+    { role: 'system', content: sys },
+    ...history.slice(-HISTORY_LIMIT),
+    { role: 'user', content: userText }
+  ];
+  const raw = await openaiChat(msgs, { temperature: 0.0 });
+  try {
+    const json = JSON.parse(raw);
+    return {
+      service: typeof json.service === 'string' ? json.service.trim().toLowerCase() : '',
+      dateHint: typeof json.date_text === 'string' ? json.date_text.trim() : '',
+      timeHint: typeof json.time_text === 'string' ? json.time_text.trim() : '',
+      name: typeof json.name === 'string' ? titleCase(json.name) : ''
+    };
+  } catch {
+    return { service:'', dateHint:'', timeHint:'', name:'' };
+  }
+}
+
 /* -------------------------------- Handler --------------------------- */
 exports.handler = async (event) => {
   if (event.httpMethod === 'GET') return { statusCode: 200, body: 'OK' };
@@ -422,7 +480,7 @@ exports.handler = async (event) => {
   const from = params.get('From') || '';
   const to   = params.get('To')   || '';
   const body = (params.get('Body') || '').trim();
-  const now = new Date().toISOString();
+  const nowISO = new Date().toISOString();
 
   // Load per-SPA runtime
   let runtime = defaultRuntime(to);
@@ -452,7 +510,7 @@ exports.handler = async (event) => {
     await appendRow({
       sheetId: messagesSheetId,
       tabName: 'messages',
-      row: [now, spaSheetKey, '-', to, from, 'sms', 'inbound', body, 'N/A', '']
+      row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'inbound', body, 'N/A', '']
     });
   } catch (e) { console.error('Inbound log failed:', e.message); }
 
@@ -466,7 +524,7 @@ exports.handler = async (event) => {
       await appendRow({
         sheetId: messagesSheetId,
         tabName: 'messages',
-        row: [now, spaSheetKey, '-', to, from, 'sms', `inbound:${complianceType}`, body, 'N/A', '']
+        row: [nowISO, spaSheetKey, '-', to, from, 'sms', `inbound:${complianceType}`, body, 'N/A', '']
       });
     } catch (e) { console.error('Compliance log failed:', e.message); }
     return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: new twilio.twiml.MessagingResponse().toString() };
@@ -484,7 +542,7 @@ exports.handler = async (event) => {
           sheetId: bookingsSheetId,
           tabName: 'bookings',
           row: [
-            now,                 // timestamp_iso
+            nowISO,              // timestamp_iso
             '',                  // booking_id
             spaSheetKey,         // spa_id
             'sms',               // channel
@@ -492,7 +550,7 @@ exports.handler = async (event) => {
             from,                // phone
             '',                  // email
             service,             // service
-            `${date} ${time}`,   // start_time (explicit)
+            `${date} ${time}`,   // start_time
             tz || '',            // timezone
             'sms',               // source
             '',                  // notes
@@ -505,7 +563,7 @@ exports.handler = async (event) => {
         created = true;
         reply = `Booked (pending): ${name} · ${service} on ${niceWhen(date, time, tz)}. We’ll confirm shortly. Reply HELP for help or STOP to opt out.`;
       } else {
-        reply = `I don't have a pending request to confirm. Tell me the service, date, time, and your name to start.`;
+        reply = `I don't see a pending request to confirm. Tell me the service, date, time, and your name to start.`;
       }
     } catch (e) {
       console.error('Create booking failed:', e.message);
@@ -518,7 +576,7 @@ exports.handler = async (event) => {
       await appendRow({
         sheetId: messagesSheetId,
         tabName: 'messages',
-        row: [now, spaSheetKey, '-', to, from, 'sms', `outbound:${created ? 'confirmed' : 'auto'}`, reply, 'N/A', '']
+        row: [nowISO, spaSheetKey, '-', to, from, 'sms', `outbound:${created ? 'confirmed' : 'auto'}`, reply, 'N/A', '']
       });
     } catch (e) { console.error('Outbound log failed:', e.message); }
     return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
@@ -527,22 +585,18 @@ exports.handler = async (event) => {
   if (/^reschedule$/i.test(body)) {
     const reply = 'Sure — what new date and time would you like?';
     const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
-    try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [now, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
+    try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
     return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
   }
 
-  /* 4) AI path when not a quick command */
-  let reply;
-  let kind = 'ai';
-
-  // Pull recent history for context (for GPT question phrasing)
+  /* 4) AI path */
   let history = [];
   try {
     history = await fetchRecentHistory({ messagesSheetId, spaKey: spaSheetKey, to, from });
   } catch (e) { console.error('History fetch failed:', e.message); }
 
-  // Extract slots (human heuristics)
-  const slots = (() => {
+  // Heuristics first
+  const slotsHeu = (() => {
     const s = { service: '', dateHint: '', timeHint: '', name: '' };
     const apply = (text) => {
       if (!text) return;
@@ -556,68 +610,83 @@ exports.handler = async (event) => {
     return s;
   })();
 
-  const normDate = normalizeDateHint(slots.dateHint, tz);
-  const normTime = normalizeTimeHint(slots.timeHint);
-  const missing = [];
-  if (!slots.service) missing.push('service');
-  if (!normDate)      missing.push('date');
-  if (!normTime)      missing.push('time');
-  if (!slots.name)    missing.push('name');
+  // If anything is missing, ask the model to extract structured hints too
+  let slotsLLM = { service:'', dateHint:'', timeHint:'', name:'' };
+  if (!slotsHeu.service || !slotsHeu.dateHint || !slotsHeu.timeHint || !slotsHeu.name) {
+    try {
+      slotsLLM = await llmExtractSlots({
+        spaDisplayName,
+        tz,
+        services,
+        history,
+        userText: body
+      });
+    } catch (e) {
+      console.error('LLM extract failed:', e.message);
+    }
+  }
 
-  // If anything missing: ask ONLY for the missing pieces (via GPT)
+  // Merge heuristics + LLM (prefer heuristics if present)
+  const merged = {
+    service : slotsHeu.service  || slotsLLM.service,
+    dateHint: slotsHeu.dateHint || slotsLLM.dateHint,
+    timeHint: slotsHeu.timeHint || slotsLLM.timeHint,
+    name    : slotsHeu.name     || slotsLLM.name
+  };
+
+  const normDate = normalizeDateHint(merged.dateHint, tz);
+  const normTime = normalizeTimeHint(merged.timeHint);
+  const missing = [];
+  if (!merged.service) missing.push('service');
+  if (!normDate)       missing.push('date');
+  if (!normTime)       missing.push('time');
+  if (!merged.name)    missing.push('name');
+
+  // Ask ONLY for missing pieces
+  let reply, kind = 'ai';
   if (missing.length) {
     const systemPrompt =
 `You are a helpful receptionist for ${spaDisplayName}.
 Ask ONLY for the missing items (${missing.join(', ')}). Keep it to 1–2 short SMS sentences.
-Do not promise availability.`;
-    try {
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        temperature: 0.2,
-        messages: [
-          { role: "system", content: systemPrompt },
-          ...history,
-          { role: "user", content: body }
-        ]
-      });
-      reply = (completion.choices?.[0]?.message?.content || '').trim();
-      if (!reply) throw new Error('Empty AI reply');
-    } catch (e) {
-      console.error('OpenAI error:', e.message);
-      kind = 'auto';
-      reply = 'Got it — could you share the missing details? (service, date, time, or your name).';
-    }
+Never promise availability.`;
+    const content = await openaiChat(
+      [{ role: 'system', content: systemPrompt }, ...history, { role: 'user', content: body }],
+      { temperature: 0.2 }
+    );
+    reply = content || 'Got it — could you share the missing details? (service, date, time, or your name).';
 
     const twiml = new twilio.twiml.MessagingResponse();
     twiml.message(reply);
-    try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [now, spaSheetKey, '-', to, from, 'sms', `outbound:${kind}`, reply, 'N/A', ''] }); } catch {}
+    try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', `outbound:${kind}`, reply, 'N/A', ''] }); } catch {}
     return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
   }
 
-  // All pieces present: enforce hours (if set)
+  // Enforce hours if provided
+  const hoursMap = parseHours(hours);
   const okHours = withinHours(normDate, normTime, tz, hoursMap);
   if (!okHours) {
-    // Build a polite nudge with the valid window
-    // Find the weekday window for that date
+    // Compute human message about window for that date
     const wd = new Intl.DateTimeFormat('en-US', { weekday:'long', timeZone: tz })
                  .format(new Date(`${normDate}T00:00:00Z`));
     let windowText = 'our regular hours that day';
     if (hoursMap) {
-      const dow = DOW[wd.toLowerCase().slice(0,3)];
-      const cfg = hoursMap[dow];
+      const dow = new Intl.DateTimeFormat('en-US', { weekday:'short', timeZone: tz })
+                    .format(new Date(`${normDate}T00:00:00Z`)).toLowerCase().slice(0,3);
+      const di = { sun:0, mon:1, tue:2, wed:3, thu:4, fri:5, sat:6 }[dow];
+      const cfg = hoursMap?.[di];
       if (cfg) windowText = `${cfg.open}–${cfg.close} ${tz}`;
       else windowText = 'closed';
     }
     reply = `We’re ${windowText.includes('closed') ? 'closed that day' : `open ${windowText}`}. Could you pick a time within those hours?`;
     const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
-    try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [now, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
+    try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
     return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
   }
 
-  // Build a confirmation proposal and store it as a marker row in messages.notes
+  // All pieces present → propose & ask for CONFIRM
   const whenNice = niceWhen(normDate, normTime, tz);
-  const proposal = { name: slots.name, service: slots.service, date: normDate, time: normTime, tz };
-  const confirmText = `Here’s what I have: ${slots.name} — ${slots.service} on ${whenNice}. Reply CONFIRM to book, or say CHANGE to adjust.`;
+  const proposal = { name: merged.name, service: merged.service, date: normDate, time: normTime, tz };
+  const confirmText = `Here’s what I have: ${merged.name} — ${merged.service} on ${whenNice}. Reply CONFIRM to book, or say CHANGE to adjust.`;
 
   const twiml = new twilio.twiml.MessagingResponse();
   twiml.message(confirmText);
@@ -626,7 +695,7 @@ Do not promise availability.`;
     await appendRow({
       sheetId: messagesSheetId,
       tabName: 'messages',
-      row: [now, spaSheetKey, '-', to, from, 'sms', 'outbound:confirm_request', confirmText, 'N/A', buildProposalJSON(proposal)]
+      row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:confirm_request', confirmText, 'N/A', buildProposalJSON(proposal)]
     });
   } catch (e) { console.error('Outbound(confirmation) log failed:', e.message); }
 
