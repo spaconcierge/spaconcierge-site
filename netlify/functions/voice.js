@@ -83,7 +83,7 @@ exports.handler = async (event) => {
           to: from,
           body:
             `You’re opted in to ${spaName} appointment updates (1–3 msgs per visit). ` +
-            "Msg&Data rates may apply. For help reply HELP; to opt out reply STOP.",
+            "Msg&Data rates may apply. For help reply HELP; to opt out reply STOP. What can we help you with?",
         };
         if (MSG_SERVICE_SID) {
           messagePayload.messagingServiceSid = MSG_SERVICE_SID;
