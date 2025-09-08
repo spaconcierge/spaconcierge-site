@@ -16,6 +16,7 @@ const { spaForNumber } = require('./_spa');
 const { getConfigs } = require('./_lib/config');
 const twilio = require('twilio');
 const { google } = require('googleapis');
+const crypto = require('crypto');
 let OpenAI = require('openai'); OpenAI = OpenAI.default || OpenAI;
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 8000 });
@@ -53,7 +54,9 @@ const HISTORY_LIMIT        = Number(process.env.HISTORY_LIMIT  || 20);
 const HISTORY_WINDOW_HOURS = Number(process.env.HISTORY_HOURS || (24 * 7)); // 7 days
 
 /* ----------------------- Compliance / intents ----------------------- */
-const CHANGE_KEYWORDS  = /\b(change|instead|another|different|reschedule|no,|actually)\b/i;
+const NEW_KEYWORDS     = /\b(new|another|add|book (?:another|new))\b/i;
+const CHANGE_KEYWORDS  = /\b(change|instead|different|reschedule|modify|move)\b/i;
+const CANCEL_KEYWORDS  = /\b(cancel|delete|remove|drop)\b/i;
 const OPT_OUT_KEYWORDS = /^(stop|cancel|end|optout|quit|revoke|stopall|unsubscribe)$/i;
 const OPT_IN_KEYWORDS  = /^(start|unstop|yes)$/i;
 const HELP_KEYWORDS    = /^(help)$/i;
@@ -71,6 +74,11 @@ function titleCase(s) {
     .join(' ');
 }
 
+// Normalize E.164 to canonical digits (reuse normalize())
+function normalizePhone(e164) {
+  return normalize(e164);
+}
+
 /* -------------------- Google Sheets (read-only) --------------------- */
 async function getSheetsRO() {
   const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
@@ -82,6 +90,22 @@ async function getSheetsRO() {
     undefined,
     privateKey,
     ['https://www.googleapis.com/auth/spreadsheets.readonly']
+  );
+  await auth.authorize();
+  return google.sheets({ version: 'v4', auth });
+}
+
+// Google Sheets (read-write)
+async function getSheetsRW() {
+  const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
+  const privateKey  = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\n/g, '\n');
+  if (!clientEmail || !privateKey) throw new Error('Missing GOOGLE_CLIENT_EMAIL / GOOGLE_PRIVATE_KEY');
+
+  const auth = new google.auth.JWT(
+    clientEmail,
+    undefined,
+    privateKey,
+    ['https://www.googleapis.com/auth/spreadsheets']
   );
   await auth.authorize();
   return google.sheets({ version: 'v4', auth });
@@ -116,6 +140,13 @@ function pickService(text, idx) {
   const t = String(text || '').toLowerCase();
   for (const v of idx.variants) if (t.includes(v)) return idx.variantToKey.get(v) || '';
   return '';
+}
+
+function normalizeServiceName(svc) {
+  const s = String(svc || '').trim().toLowerCase();
+  if (!s) return '';
+  // strip trailing plural 's' if present
+  return s.endsWith('s') ? s.slice(0, -1) : s;
 }
 
 /* -------------------------- Slot extraction ------------------------- */
@@ -160,6 +191,19 @@ function nameFrom(text, idx) {
     const isMon = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\b/i.test(candidate);
     const isServiceish = idx.variants.some(w => candidate.includes(w));
     if (!isDay && !isMon && !isServiceish && !NAME_STOPWORDS.has(candidate)) return titleCase(nm);
+  }
+  return '';
+}
+
+function extractForName(text) {
+  const t = String(text || '');
+  const patterns = [
+    /\bfor\s+(?:my\s+(?:son|daughter|wife|husband|partner)\s+)?([A-Z][A-Za-z'’\-]{1,29})\b/,
+    /\bbook\s+under\s+([A-Z][A-Za-z'’\-]{1,29})\b/,
+  ];
+  for (const re of patterns) {
+    const m = re.exec(t);
+    if (m) return titleCase(m[1]);
   }
   return '';
 }
@@ -286,6 +330,100 @@ function niceWhen(ymd, hhmm, tz) {
     timeZone: tz, weekday:'short', month:'short', day:'numeric',
     hour:'numeric', minute:'2-digit'
   }).format(dt);
+}
+
+// Parse a booking row start_time into { ymd, hhmm } using existing normalizers
+function parseStartTimeToYmdHhmm(start_time, tz) {
+  const text = String(start_time || '').trim();
+  if (!text) return { ymd: '', hhmm: '' };
+
+  // 1) Try direct YYYY-MM-DD HH:mm
+  const m1 = /^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})/.exec(text);
+  if (m1) return { ymd: m1[1], hhmm: m1[2] };
+
+  // 2) Fuzzy like "Sep 9 3pm" or other variants
+  const dateHint = extractDateHint(text) || text;
+  const timeHint = extractTimeHint(text) || text;
+  const ymd = normalizeDateHint(dateHint, tz);
+  const hhmm = normalizeTimeHint(timeHint);
+  if (ymd && hhmm) return { ymd, hhmm };
+  return { ymd: '', hhmm: '' };
+}
+
+/* -------------------- Bookings fetch (read-only) -------------------- */
+async function fetchActiveBookings({ bookingsSheetId, spaKey, phone, tz, lookbackDays = 7, lookaheadDays = 90 }) {
+  const sheets = await getSheetsRO();
+  const resp = await sheets.spreadsheets.values.get({ spreadsheetId: bookingsSheetId, range: 'bookings!A:Q' });
+  const rows = resp.data.values || [];
+  if (!rows.length) return [];
+
+  const normPhone = normalizePhone(phone);
+  const phonesMatch = (candidate) => {
+    const c = normalizePhone(candidate);
+    if (!c || !normPhone) return false;
+    return c === normPhone || c === '1' + normPhone || '1' + c === normPhone;
+  };
+
+  const now = nowPartsInTZ(tz);
+  const today = ymdToDate(now.year, now.month, now.day);
+  const startBound = new Date(today); startBound.setUTCDate(startBound.getUTCDate() - lookbackDays);
+  const endBound   = new Date(today); endBound.setUTCDate(endBound.getUTCDate() + lookaheadDays);
+
+  const out = [];
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i] || [];
+    const spa_id   = r[2] || '';
+    const name     = r[4] || '';
+    const phoneCol = r[5] || '';
+    const service  = r[7] || '';
+    const startStr = r[8] || '';
+    const rowTz    = r[9] || tz || '';
+    const status   = (r[13] || '').toString().toLowerCase();
+
+    if (spa_id !== spaKey) continue;
+    if (!phonesMatch(phoneCol)) continue;
+    if (!['pending','confirmed'].includes(status)) continue;
+
+    const { ymd, hhmm } = parseStartTimeToYmdHhmm(startStr, rowTz || tz);
+    if (!ymd || !hhmm) continue;
+
+    const dt = new Date(`${ymd}T${hhmm}:00Z`);
+    if (dt < startBound || dt > endBound) continue;
+
+    out.push({ name, service, ymd, hhmm, tz: rowTz || tz, status, rowIndex: i + 1 });
+  }
+  return out;
+}
+
+/* --------------------- Bookings helpers (index/dupe) ---------------- */
+function indexBookingsByName(bookings) {
+  const byName = new Map();
+  for (const b of bookings || []) {
+    const key = titleCase(String(b.name || '').trim());
+    if (!key) continue;
+    if (!byName.has(key)) byName.set(key, []);
+    byName.get(key).push(b);
+  }
+  return byName;
+}
+function isDuplicateBooking(existing, proposed) {
+  const nameKey = titleCase(proposed.name || '');
+  const svcKey = normalizeServiceName(proposed.service);
+  const round5 = (hhmm) => {
+    const [h, m] = (hhmm || '00:00').split(':').map(n=>+n);
+    const rounded = Math.round(m / 5) * 5;
+    const carry = Math.floor(rounded / 60);
+    const mm = rounded % 60;
+    const hh = (h + carry) % 24;
+    return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+  };
+  const target = round5(proposed.hhmm);
+  return (existing || []).some(b => {
+    if (titleCase(b.name) !== nameKey) return false;
+    if (normalizeServiceName(b.service) !== svcKey) return false;
+    if (b.ymd !== proposed.ymd) return false;
+    return round5(b.hhmm) === target;
+  });
 }
 
 /* -------------------- Config runtime (with fallback) ---------------- */
@@ -433,6 +571,13 @@ async function findPendingProposal({ messagesSheetId, spaKey, to, from }) {
     const pair = (To === normFrom && From === normTo) || (To === normTo && From === normFrom);
     if (!pair) continue;
     if (!/^outbound:confirm_request$/i.test(status)) continue;
+    // Ignore proposals older than 24h
+    const ts = r[0] || '';
+    const tms = Date.parse(ts);
+    if (isFinite(tms)) {
+      const ageMs = Date.now() - tms;
+      if (ageMs > 24 * 3600 * 1000) continue;
+    }
     try {
       const json = JSON.parse(notes);
       if (json && json.service && json.date && json.time && json.name) return json;
@@ -441,15 +586,47 @@ async function findPendingProposal({ messagesSheetId, spaKey, to, from }) {
   return null;
 }
 function buildProposalJSON({ name, service, date, time, tz }) {
-  return JSON.stringify({ name, service, date, time, tz });
+  const raw = `${service}|${name}|${date}|${time}|${tz}|${Date.now()}`;
+  const proposal_id = crypto.createHash('sha1').update(raw).digest('hex');
+  return JSON.stringify({ name, service, date, time, tz, proposal_id });
+}
+
+/* --------------------- Sheets update + action logging --------------- */
+async function updateBookingFields({ spreadsheetId, rowIndex, updatesArray }) {
+  // updatesArray is full row Q columns (A..Q) content
+  const sheets = await getSheetsRW();
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `bookings!A${rowIndex}:Q${rowIndex}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [updatesArray] }
+  });
+}
+async function appendAction({ sheetId, spaId, phone, name, action, details, status = 'open' }) {
+  try {
+    await appendRow({
+      sheetId,
+      tabName: 'actions',
+      row: [new Date().toISOString(), spaId, phone, name || '', action, details || '', status]
+    });
+  } catch (e) {
+    console.error('appendAction failed:', e.message);
+  }
+}
+
+function padRowToQ(row) {
+  const out = Array.isArray(row) ? row.slice() : [];
+  while (out.length < 17) out.push('');
+  return out;
 }
 
 /* ----------------------- LLM slot extraction pass ------------------- */
-async function llmExtractSlots({ spaDisplayName, tz, services, history, userText }) {
+async function llmExtractSlots({ spaDisplayName, tz, services, history, userText, prefaceSys = '' }) {
   const now = nowPartsInTZ(tz);
   const svcKeys = (services || []).map(s => s.key);
   const sys =
-`You are a receptionist for ${spaDisplayName}. Extract fields from the conversation.
+`${prefaceSys}You are a friendly, conversational receptionist for ${spaDisplayName}. Be warm but concise.
+Extract ONLY from the user's latest request; ignore stale confirmations.
 Return ONLY JSON with keys: service, date_text, time_text, name.
 - service: one of [${svcKeys.join(', ')}] if possible; else "".
 - date_text: user's hint for date (e.g., "tomorrow", "Sep 12", "Friday"); else "".
@@ -596,11 +773,131 @@ exports.handler = async (event) => {
     return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
   }
 
-  /* 4) AI path */
+  /* 4) Fetch current bookings for this number (read-only) */
+  let activeBookings = [];
+  try {
+    activeBookings = await fetchActiveBookings({ bookingsSheetId, spaKey: spaSheetKey, phone: from, tz });
+  } catch (e) {
+    console.error('fetchActiveBookings failed:', e.message);
+  }
+  const bookingsByName = indexBookingsByName(activeBookings);
+  const knownNames = Array.from(bookingsByName.keys());
+
+  // Intent handling: CANCEL and RESCHEDULE/CHANGE lightweight flows
+  const lowerBodyEarly = body.toLowerCase();
+  if (CANCEL_KEYWORDS.test(lowerBodyEarly)) {
+    // Try to identify which booking to cancel
+    if (!activeBookings.length) {
+      const reply = `I don’t see any upcoming bookings for this number. If I’m missing one, tell me the service and date.`;
+      const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
+      try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
+      return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
+    }
+
+    const hintedName = extractForName(body) || nameFrom(body, svcIndex);
+    let candidates = activeBookings;
+    if (hintedName) candidates = candidates.filter(b => titleCase(b.name) === titleCase(hintedName));
+
+    if (candidates.length > 1) {
+      const lines = candidates.slice(0, 5).map(b => `${titleCase(b.name)} — ${b.service} — ${niceWhen(b.ymd, b.hhmm, b.tz || tz)}`);
+      const reply = `Which appointment should I cancel?\n- ${lines.join('\n- ')}\nReply with the service and date (e.g., "cancel massage Tue 11:00").`;
+      const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
+      try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
+      return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
+    }
+
+    const toCancel = candidates[0];
+    if (toCancel) {
+      // Read the existing row to preserve columns
+      const rows = await getSheetsROValues(bookingsSheetId, `bookings!A${toCancel.rowIndex}:Q${toCancel.rowIndex}`);
+      const row = padRowToQ(rows[0] || []);
+      row[13] = 'cancelled'; // status col N (index 13)
+      try {
+        await updateBookingFields({ spreadsheetId: bookingsSheetId, rowIndex: toCancel.rowIndex, updatesArray: row });
+        const reply = `All set — I’ve cancelled ${titleCase(toCancel.name)}’s ${toCancel.service} on ${niceWhen(toCancel.ymd, toCancel.hhmm, toCancel.tz || tz)}.`;
+        const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
+        try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
+        return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
+      } catch (e) {
+        console.error('Cancel update failed:', e.message);
+        await appendAction({ sheetId: messagesSheetId, spaId: spaSheetKey, phone: from, name: toCancel.name, action: 'cancel_requested', details: `${toCancel.service} ${toCancel.ymd} ${toCancel.hhmm}` });
+        const reply = `I couldn’t update that just now, but I’ve flagged it for our team.`;
+        const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
+        try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
+        return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
+      }
+    }
+  }
+
+  if (CHANGE_KEYWORDS.test(lowerBodyEarly) || /^reschedule$/i.test(body)) {
+    // Try to identify a likely target appointment: prefer single known name or name mentioned in body
+    let targetName = '';
+    const hintedName = extractForName(body) || nameFrom(body, svcIndex);
+    if (hintedName) {
+      const hit = knownNames.find(n => n.toLowerCase() === hintedName.toLowerCase());
+      if (hit) targetName = hit;
+    }
+    if (!targetName && knownNames.length > 1) {
+      const reply = `I see bookings for ${knownNames.join(' and ')}. Who is this for?`;
+      const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
+      try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
+      return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
+    }
+    if (!targetName && knownNames.length === 1) targetName = knownNames[0];
+
+    const nowParts = nowPartsInTZ(tz);
+    const nowDate = new Date(Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day, nowParts.hour, nowParts.minute));
+    const candidates = activeBookings
+      .filter(b => (targetName ? titleCase(b.name) === targetName : true))
+      .filter(b => new Date(`${b.ymd}T${b.hhmm}:00Z`) >= nowDate)
+      .sort((a, b) => new Date(`${a.ymd}T${a.hhmm}:00Z`) - new Date(`${b.ymd}T${b.hhmm}:00Z`));
+
+    const pick = candidates[0] || activeBookings[0];
+    if (pick) {
+      // If the message includes a time/date, attempt immediate update; else ask for new time
+      const newDateHint = extractDateHint(body);
+      const newTimeHint = extractTimeHint(body);
+      const newYmd = newDateHint ? normalizeDateHint(newDateHint, tz) : '';
+      const newHhmm = newTimeHint ? normalizeTimeHint(newTimeHint) : '';
+      if (newYmd && newHhmm) {
+        try {
+          const rows = await getSheetsROValues(bookingsSheetId, `bookings!A${pick.rowIndex}:Q${pick.rowIndex}`);
+          const row = padRowToQ(rows[0] || []);
+          row[8] = `${newYmd} ${newHhmm}`; // start_time col I (index 8)
+          await updateBookingFields({ spreadsheetId: bookingsSheetId, rowIndex: pick.rowIndex, updatesArray: row });
+          const reply = `Done — I’ve moved ${titleCase(pick.name)}’s ${pick.service} to ${niceWhen(newYmd, newHhmm, pick.tz || tz)}.`;
+          const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
+          try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
+          return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
+        } catch (e) {
+          console.error('Reschedule update failed:', e.message);
+          await appendAction({ sheetId: messagesSheetId, spaId: spaSheetKey, phone: from, name: pick.name, action: 'reschedule_requested', details: `${pick.service} ${pick.ymd} ${pick.hhmm} -> ${newYmd} ${newHhmm}` });
+          const reply = `I couldn’t update that just now, but I’ve flagged it for our team.`;
+          const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
+          try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
+          return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
+        }
+      } else {
+        const reply = `I see ${titleCase(pick.name)} — ${pick.service} — ${niceWhen(pick.ymd, pick.hhmm, pick.tz || tz)}. What’s your new date and time?`;
+        const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
+        try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
+        return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
+      }
+    }
+  }
+
+  /* 5) AI path */
   let history = [];
   try {
     history = await fetchRecentHistory({ messagesSheetId, spaKey: spaSheetKey, to, from });
   } catch (e) { console.error('History fetch failed:', e.message); }
+
+  // History scope: if user indicates NEW/CHANGE/CANCEL, only consider latest inbound
+  let effectiveHistory = history;
+  const lowerBody = body.toLowerCase();
+  if (CHANGE_KEYWORDS.test(lowerBody) || NEW_KEYWORDS.test(lowerBody) || CANCEL_KEYWORDS.test(lowerBody)) {
+    effectiveHistory = [{ role: 'user', content: body }];
+  }
 
   // ---------- Heuristics with "latest message wins" ----------
   const slotsHeu = (() => {
@@ -626,12 +923,15 @@ exports.handler = async (event) => {
     return s;
   })();
 
-  // If anything missing, run a tight LLM extractor
+  // If anything missing, run a tight LLM extractor with context facts
   let slotsLLM = { service:'', dateHint:'', timeHint:'', name:'' };
   const needsLLM = !slotsHeu.service || !slotsHeu.dateHint || !slotsHeu.timeHint || !slotsHeu.name;
   if (needsLLM) {
     try {
-      slotsLLM = await llmExtractSlots({ spaDisplayName, tz, services, history, userText: body });
+      const existingFacts = activeBookings.slice(0, 4).map(b => `${titleCase(b.name)} — ${b.service} — ${niceWhen(b.ymd, b.hhmm, b.tz || tz)} (${b.status})`);
+      const now = nowPartsInTZ(tz);
+      const factsBlock = existingFacts.length ? `Existing bookings for this number:\n- ${existingFacts.join('\n- ')}\n\n` : '';
+      slotsLLM = await llmExtractSlots({ spaDisplayName, tz, services, history: effectiveHistory, userText: body, prefaceSys: `${factsBlock}` });
     } catch (e) {
       console.error('LLM extract failed:', e.message);
     }
@@ -645,18 +945,14 @@ exports.handler = async (event) => {
     name    : slotsHeu.name     || slotsLLM.name
   };
 
-  // If the user said "change"/"instead"/etc., re-extract from THIS message only
-  // and drop previous turns for the follow-up prompt.
-  let effectiveHistory = history;
-  if (CHANGE_KEYWORDS.test(body)) {
-    merged = {
-      service : pickService(body, svcIndex),
-      dateHint: extractDateHint(body),
-      timeHint: extractTimeHint(body),
-      name    : nameFrom(body, svcIndex)
-    };
-    effectiveHistory = [];
+  // Known-name rules: if "for X" matches a known name, pin it; else single known
+  const forName = /(?:for|for\s+my)\s+([A-Z][A-Za-z'’\-]{1,29})/.exec(body);
+  if (forName) {
+    const guess = titleCase(forName[1]);
+    const hit = knownNames.find(n => n.toLowerCase() === guess.toLowerCase());
+    if (hit) merged.name = hit;
   }
+  if (!merged.name && knownNames.length === 1) merged.name = knownNames[0];
 
   const normDate = normalizeDateHint(merged.dateHint, tz);
   const normTime = normalizeTimeHint(merged.timeHint);
@@ -666,11 +962,25 @@ exports.handler = async (event) => {
   if (!normTime)       missing.push('time');
   if (!merged.name)    missing.push('name');
 
+  // If name is missing, try a secondary pass: extract "for X" or "book under X" and prefer knownNames
+  if (missing.includes('name')) {
+    const guessName = extractForName(body) || nameFrom(body, svcIndex);
+    if (guessName) {
+      const hit = knownNames.find(n => n.toLowerCase() === guessName.toLowerCase());
+      if (hit) {
+        merged.name = hit;
+        const idx = missing.indexOf('name'); if (idx >= 0) missing.splice(idx, 1);
+      }
+    }
+  }
+
+  // If still missing name, ask explicitly before proposing
+
   // ---------- Ask only for what's missing, in a friendly, natural tone ----------
   if (missing.length) {
     const systemPrompt =
-`You are a friendly, concise receptionist for ${spaDisplayName}.
-Your goal: help the guest and keep the chat natural BUT ask ONLY for the missing piece(s): ${missing.join(', ')}.
+`You are a friendly, conversational receptionist for ${spaDisplayName}. Be warm but concise.
+Ask ONLY for the missing piece(s): ${missing.join(', ')}.
 Never promise availability. If the guest said "change" or similar, ignore earlier suggestions and rebuild from their latest message.`;
 
     const content = await openaiChat(
@@ -706,10 +1016,20 @@ Never promise availability. If the guest said "change" or similar, ignore earlie
     return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
   }
 
+  // Duplicate guard before proposing
+  const proposing = { name: merged.name, service: merged.service, ymd: normDate, hhmm: normTime };
+  if (isDuplicateBooking(activeBookings, proposing)) {
+    const dupMsg = `You already have ${merged.service} for ${merged.name} on ${niceWhen(normDate, normTime, tz)}. Do you want another time or to reschedule the existing one?`;
+    const tw = new twilio.twiml.MessagingResponse();
+    tw.message(dupMsg);
+    try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', dupMsg, 'N/A', ''] }); } catch {}
+    return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: tw.toString() };
+  }
+
   // ---------- All pieces present -> propose & ask for CONFIRM ----------
   const whenNice = niceWhen(normDate, normTime, tz);
   const proposal = { name: merged.name, service: merged.service, date: normDate, time: normTime, tz };
-  const confirmText = `Here’s what I have: ${merged.name} — ${merged.service} on ${whenNice}. Reply CONFIRM to book, or say CHANGE to adjust.`;
+  const confirmText = `Just to make sure I’ve got this right: ${merged.name} — ${merged.service} on ${whenNice}. If that looks perfect, just reply CONFIRM. Or say CHANGE if you want to adjust.`;
 
   const twiml = new twilio.twiml.MessagingResponse();
   twiml.message(confirmText);
