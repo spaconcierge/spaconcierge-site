@@ -630,6 +630,16 @@ exports.handler = async (event) => {
 };
 
 // If the user explicitly wants to change, ignore history and re-extract from *this* message only
+// Merge heuristics + LLM (prefer heuristics if present)
+let merged = {
+  service : slotsHeu.service  || slotsLLM.service,
+  dateHint: slotsHeu.dateHint || slotsLLM.dateHint,
+  timeHint: slotsHeu.timeHint || slotsLLM.timeHint,
+  name    : slotsHeu.name     || slotsLLM.name
+};
+
+// If the user explicitly says "change", ignore history completely
+let effectiveHistory = history;
 if (CHANGE_KEYWORDS.test(body)) {
   merged = {
     service : pickService(body, svcIndex),
@@ -637,6 +647,7 @@ if (CHANGE_KEYWORDS.test(body)) {
     timeHint: extractTimeHint(body),
     name    : nameFrom(body, svcIndex)
   };
+  effectiveHistory = []; // 🚨 critical: drop old turns
 }
 
   const normDate = normalizeDateHint(merged.dateHint, tz);
