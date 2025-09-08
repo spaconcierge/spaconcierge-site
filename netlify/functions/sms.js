@@ -475,10 +475,8 @@ exports.handler = async (event) => {
 
     // 3b) are we awaiting confirmation? (scan last assistant msg)
     const lastAssistant = [...history].reverse().find(m => m.role==='assistant')?.content || '';
-    const awaitingConfirm = /reply\s+yes\s+to\s+confirm/i.test(lastAssistant);
-
-    // 3c) If user says YES while awaiting confirmation → write booking
-    if (awaitingConfirm && /^(y|yes|confirm|book)$/i.test(body)) {
+   const awaitingConfirm = /confirm/i.test(lastAssistant);
+if (awaitingConfirm && /\b(yes|y|yeah|yep|confirm|book)\b/i.test(body)) {
       // normalize “tomorrow / Fri” now (again, in case a tweak happened)
       const dt = resolveLocalDateTime({ dateWord: slots.whenDate, timeWord: slots.whenTime, tz });
       if (!dt) {
