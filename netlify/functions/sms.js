@@ -1,12 +1,12 @@
 // netlify/functions/sms.js
 // ----------------------------------------------------------------------------
 // Keeps existing behavior (compliance logging, C/reschedule keywords, history,
-// bookings logging) and adds per-SPA config wiring (sheets, tz, services, etc.)
+// bookings logging) and adds per-SPA config wiring + hours + better slots.
 // ----------------------------------------------------------------------------
 
-const { appendRow } = require('./_sheets');          // writes a row (we keep this)
+const { appendRow } = require('./_sheets');          // writes one row
 const { spaForNumber } = require('./_spa');          // legacy display name fallback
-const { getConfigs } = require('./_lib/config');     // your TS config loader (spas tab)
+const { getConfigs } = require('./_lib/config');     // TS config loader (spas tab)
 const twilio = require('twilio');
 const { google } = require('googleapis');
 let OpenAI = require('openai'); OpenAI = OpenAI.default || OpenAI;
@@ -15,7 +15,9 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 8000 })
 
 /* ----------------------------- Tunables ----------------------------- */
 const HISTORY_LIMIT        = Number(process.env.HISTORY_LIMIT  || 10);
-const HISTORY_WINDOW_HOURS = Number(process.env.HISTORY_HOURS || 48);
+const HISTORY_WINDOW_HOURS = Number(process.env.HISTORY_HOURS  || 48);
+const BOOKING_LOOKBACK_ROWS = 80;      // recent rows to scan for de-dupe
+const BOOKING_DEDUP_HOURS   = 48;      // consider dup if same within X hours
 
 /* ----------------------- Compliance keywords ------------------------ */
 const OPT_OUT_KEYWORDS = /^(stop|cancel|end|optout|quit|revoke|stopall|unsubscribe)$/i;
@@ -36,15 +38,10 @@ function titleCase(s) {
 }
 
 /* -------------------- Google Sheets (read-only) --------------------- */
-/** Use split env vars; do NOT depend on GOOGLE_SERVICE_ACCOUNT_JSON. */
 async function getSheetsRO() {
   const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
   const privateKey  = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
-
-  if (!clientEmail || !privateKey) {
-    throw new Error('Missing GOOGLE_CLIENT_EMAIL / GOOGLE_PRIVATE_KEY');
-  }
-
+  if (!clientEmail || !privateKey) throw new Error('Missing GOOGLE_CLIENT_EMAIL / GOOGLE_PRIVATE_KEY');
   const auth = new google.auth.JWT(
     clientEmail,
     undefined,
@@ -80,7 +77,6 @@ function makeServiceIndex(services) {
   variants.sort((a,b) => b.length - a.length); // prefer longer phrase
   return { variantToKey, variants };
 }
-
 function pickService(text, idx) {
   const t = String(text || '').toLowerCase();
   for (const v of idx.variants) {
@@ -90,73 +86,203 @@ function pickService(text, idx) {
 }
 
 /* -------------------------- Slot extraction ------------------------- */
-const timeRe  = /\b(?:[01]?\d|2[0-3])(?::\d{2})?\s?(?:am|pm)\b/i;
+// — regexes —
+const timeRe  = /\b(?:[01]?\d|2[0-3])(?::\d{2})?\s?(?:am|pm)?\b/i;
 const dayRe   = /\b(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b/i;
 const dateRe  = /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/;
 const monthRe = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?\b/i;
-const relRe   = /\b(?:today|tomorrow|tmrw|this (?:mon|tue|wed|thu|fri|sat|sun|weekend))\b/i;
-const namePhraseRe  = /\b(?:my name(?:'s)? is|name is|i am|i'm|im|this is|call me|it's)\s+([A-Z][a-z' -]{1,29})\b/;
-// --- date/time helpers (replace whenPhrase with these) ---
+const relRe   = /\b(?:today|tomorrow|tmrw|this\s+(?:mon|tue|wed|thu|fri|sat|sun)|weekend)\b/i;
+
+// — date/time helpers —
 function firstMatchWithIndex(text, regexes) {
   const t = String(text || '');
-  let best = null; // {val, idx}
+  let best = null; // { val, idx }
   for (const re of regexes) {
     const m = re.exec(t);
     if (m && m.index >= 0) {
-      const val = m[0];
-      if (best === null || m.index < best.idx) best = { val, idx: m.index };
+      if (best === null || m.index < best.idx) best = { val: m[0], idx: m.index };
     }
   }
   return best ? best.val : '';
 }
-
 function extractDatePart(text) {
-  // month name date (e.g. "Sep 12"), numeric date (e.g. "9/12"), weekday ("Friday"),
-  // relative ("tomorrow", "this Tue", "weekend")
   return firstMatchWithIndex(text, [monthRe, dateRe, dayRe, relRe]);
 }
-
 function extractTimePart(text) {
-  // 4pm, 10:30 AM, 14:00, etc.
   return firstMatchWithIndex(text, [timeRe]);
 }
 
-function combineWhen(datePart, timePart) {
-  if (datePart && timePart) return `${datePart} ${timePart}`.trim();
-  return (datePart || timePart || '').trim();
+// — timezone helpers (no external lib) —
+function tzParts(date, tz) {
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false, weekday: 'short'
+  });
+  const parts = Object.fromEntries(fmt.formatToParts(date).map(p => [p.type, p.value]));
+  const weekdayMap = { Sun:0, Mon:1, Tue:2, Wed:3, Thu:4, Fri:5, Sat:6 };
+  return {
+    y: +parts.year, m: +parts.month, d: +parts.day,
+    hh: +parts.hour, mm: +parts.minute,
+    dow: weekdayMap[parts.weekday] ?? 0
+  };
 }
+function fmtYMD({y,m,d}) {
+  const pad = (n)=> String(n).padStart(2,'0');
+  return `${y}-${pad(m)}-${pad(d)}`;
+}
+function addDays({y,m,d}, n, tz) {
+  // create a date in tz by formatting then using UTC add
+  const dt = new Date(`${fmtYMD({y,m,d})}T12:00:00Z`); // noon safe anchor
+  // approximate shift by using UTC day math; for our “next few days” this is sufficient
+  dt.setUTCDate(dt.getUTCDate() + n);
+  const p = tzParts(dt, tz);
+  return { y: p.y, m: p.m, d: p.d, dow: p.dow };
+}
+function nextDow(from, targetDow, tz) {
+  let cur = { y: from.y, m: from.m, d: from.d, dow: from.dow };
+  for (let i=0;i<7;i++) {
+    if (i>0) cur = addDays(cur,1,tz);
+    if (cur.dow === targetDow) return cur;
+  }
+  return from;
+}
+function parseDateToYMD(raw, tz) {
+  const now = tzParts(new Date(), tz);
+  const t = (raw || '').toLowerCase();
+
+  // explicit month name (Sep 8[, 2025])
+  const m1 = /(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+(\d{1,2})(?:,\s*(\d{4}))?/i.exec(raw || '');
+  if (m1) {
+    const monthIdx = "jan feb mar apr may jun jul aug sep oct nov dec".split(' ').findIndex(s => (raw||'').toLowerCase().startsWith(s));
+    const M = monthIdx + 1;
+    const D = +m1[1];
+    const Y = m1[2] ? +m1[2] : now.y;
+    return { y:Y, m:M, d:D };
+  }
+
+  // numeric 9/8[/2025]
+  const m2 = /(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/.exec(t);
+  if (m2) {
+    const M = +m2[1], D = +m2[2];
+    let Y = m2[3] ? +m2[3] : now.y;
+    if (Y < 100) Y += 2000;
+    return { y:Y, m:M, d:D };
+  }
+
+  // weekday / relative
+  if (/tomorrow|tmrw/.test(t)) return addDays(now, 1, tz);
+  if (/today/.test(t)) return { y: now.y, m: now.m, d: now.d };
+
+  const wd = /(?:mon|tue|wed|thu|fri|sat|sun)/.exec(t);
+  if (wd) {
+    const map = { mon:1,tue:2,wed:3,thu:4,fri:5,sat:6,sun:0 };
+    const target = map[wd[0].slice(0,3)];
+    const base = /this\s+/.test(t) ? now : addDays(now, 1, tz); // “this tue” can be today’s week
+    return nextDow(base, target, tz);
+  }
+
+  // weekend
+  if (/weekend/.test(t)) {
+    // choose Saturday
+    return nextDow(addDays(now,1,tz), 6, tz);
+  }
+
+  return null;
+}
+function parseTimeToHM(raw) {
+  const s = String(raw || '').trim().toLowerCase();
+  const m = /(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/.exec(s);
+  if (!m) return null;
+  let hh = +m[1], mm = m[2] ? +m[2] : 0;
+  const ampm = m[3];
+  if (ampm) {
+    if (ampm === 'pm' && hh < 12) hh += 12;
+    if (ampm === 'am' && hh === 12) hh = 0;
+  }
+  if (hh >= 0 && hh <= 23 && mm >= 0 && mm < 60) return { hh, mm };
+  return null;
+}
+function combineWhenYMDHM(datePart, timePart) {
+  if (!datePart && !timePart) return { ymd:'', hm:'' };
+  const ymd = datePart ? fmtYMD(datePart) : '';
+  const hm  = timePart ? `${String(timePart.hh).padStart(2,'0')}:${String(timePart.mm).padStart(2,'0')}` : '';
+  return { ymd, hm };
+}
+
+// — name extraction (avoid “hi/yeah/thanks/grandma” etc.) —
+const namePhraseRe = /\b(?:my name(?:'s)? is|name is|i am|i'm|im|this is|call me|it's)\s+([A-Z][a-z' -]{1,29})\b/;
+const bannedNames  = /^(hi|hello|hey|yeah|yep|no|thanks|thank|ok|okay|tomorrow|today|weekend|grandma|grandpa|mom|dad|sister|brother)$/i;
 
 function nameFrom(text, idx) {
   const t = String(text || '').trim();
 
-  // Explicit phrases ("my name is", "call me", "it's", etc.)
   const m1 = namePhraseRe.exec(t);
   if (m1) return titleCase(m1[1]);
 
-  // Any single capitalized word not obviously a service/day/month
+  // capitalized single word that isn't a service, day, month, or banned term
   const cap = /\b([A-Z][a-z]{1,29})\b/.exec(t);
   if (cap) {
-    const candidate = cap[1].toLowerCase();
+    const cand = cap[1].toLowerCase();
     if (
-      !idx.variants.some(w => candidate.includes(w)) &&
-      !/\b(mon|tue|wed|thu|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(candidate) &&
-      !/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\b/i.test(candidate)
+      !idx.variants.some(w => cand.includes(w)) &&
+      !/\b(mon|tue|wed|thu|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(cand) &&
+      !/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\b/i.test(cand) &&
+      !bannedNames.test(cand)
     ) {
       return titleCase(cap[1]);
     }
   }
 
-  // Fallback: first token that isn't a service word
-  const m2 = /^([a-z][a-z' -]{1,29})(?:,|\s|$)/i.exec(t);
-  if (m2) {
-    const candidate = m2[1].toLowerCase();
-    if (!idx.variants.some(w => candidate.includes(w))) return titleCase(m2[1]);
-  }
-
   return '';
 }
 
-function extractSlotsFromMessages(history, currentUserMsg, idx) {
+/* --------------------- Hours handling (per config) ------------------ */
+function parseHoursMap(hoursJson) {
+  // supports {"mon-fri":"09:00-18:00","sat":"10:00-14:00","sun":null}
+  // returns {0..6: {open:"HH:MM", close:"HH:MM"} | null}
+  const map = {0:null,1:null,2:null,3:null,4:null,5:null,6:null};
+  if (!hoursJson) return map;
+  const obj = typeof hoursJson === 'string' ? JSON.parse(hoursJson) : hoursJson;
+  const setRange = (didx, val) => {
+    if (!val) { map[didx] = null; return; }
+    const m = /(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})/.exec(val);
+    if (!m) { map[didx] = null; return; }
+    map[didx] = { open: m[1], close: m[2] };
+  };
+  const days = ['sun','mon','tue','wed','thu','fri','sat'];
+  for (const k of Object.keys(obj)) {
+    const val = obj[k];
+    const low = k.toLowerCase();
+    const r = /^(sun|mon|tue|wed|thu|fri|sat)(?:\s*-\s*(sun|mon|tue|wed|thu|fri|sat))?$/i.exec(low);
+    if (r) {
+      const a = days.indexOf(r[1]); const b = r[2] ? days.indexOf(r[2]) : a;
+      let i = a; do { setRange(i, val); i = (i+1)%7; } while (i !== (b+1)%7);
+      continue;
+    }
+    const idx = days.indexOf(low);
+    if (idx >= 0) setRange(idx, val);
+  }
+  return map;
+}
+function isWithinHours({ ymd, hm }, tz, hoursMap) {
+  if (!ymd || !hm) return false;
+  const [Y,M,D] = ymd.split('-').map(n => +n);
+  // Get day-of-week in tz
+  const p = tzParts(new Date(`${ymd}T12:00:00Z`), tz);
+  const w = p.dow; // 0..6
+  const rule = hoursMap[w];
+  if (!rule) return false; // closed
+  return hm >= rule.open && hm <= rule.close;
+}
+function openWindowString(ymd, tz, hoursMap) {
+  const p = tzParts(new Date(`${ymd || '2000-01-02'}T12:00:00Z`), tz);
+  const rule = hoursMap[p.dow];
+  return rule ? `${rule.open}–${rule.close}` : 'closed';
+}
+
+/* ----------------- Extract slots from history + message -------------- */
+function extractSlotsFromMessages(history, currentUserMsg, idx, tz) {
+  const now = tzParts(new Date(), tz);
   const slots = { service: '', when: '', whenDate: '', whenTime: '', name: '' };
 
   function apply(text) {
@@ -164,19 +290,29 @@ function extractSlotsFromMessages(history, currentUserMsg, idx) {
     if (!slots.service) slots.service = pickService(text, idx);
     if (!slots.name)    slots.name    = nameFrom(text, idx);
 
-    const d = extractDatePart(text);
-    const t = extractTimePart(text);
-    if (!slots.whenDate && d) slots.whenDate = d;
-    if (!slots.whenTime && t) slots.whenTime = t;
+    const rawDate = extractDatePart(text);
+    const rawTime = extractTimePart(text);
+    if (rawDate && !slots.whenDate) {
+      const d = parseDateToYMD(rawDate, tz);
+      if (d) slots.whenDate = fmtYMD(d);
+    }
+    if (rawTime && !slots.whenTime) {
+      const hm = parseTimeToHM(rawTime);
+      if (hm) slots.whenTime = `${String(hm.hh).padStart(2,'0')}:${String(hm.mm).padStart(2,'0')}`;
+    }
   }
 
-  // prefer user turns in chronological order
-  for (const m of history) {
-    if (m.role === 'user') apply(m.content);
-  }
+  for (const m of history) if (m.role === 'user') apply(m.content);
   if (currentUserMsg) apply(currentUserMsg);
 
-  slots.when = combineWhen(slots.whenDate, slots.whenTime);
+  // assemble combined
+  if (slots.whenDate || slots.whenTime) {
+    const { ymd, hm } = combineWhenYMDHM(
+      slots.whenDate ? { y:+slots.whenDate.slice(0,4), m:+slots.whenDate.slice(5,7), d:+slots.whenDate.slice(8,10) } : null,
+      slots.whenTime ? { hh:+slots.whenTime.slice(0,2), mm:+slots.whenTime.slice(3,5) } : null
+    );
+    slots.when = `${ymd || ''}${ymd && hm ? ' ' : ''}${hm || ''}`.trim();
+  }
   return slots;
 }
 function missingFields(slots) {
@@ -206,7 +342,6 @@ function defaultRuntime(e164To) {
     aiExtra: ''
   };
 }
-
 async function loadSpaRuntime(e164To) {
   let cfgs = null;
   try {
@@ -226,7 +361,6 @@ async function loadSpaRuntime(e164To) {
       if (normalize(k) === normTo) { spaId = v; break; }
     }
   }
-
   if (!spaId || !bySpaId[spaId]) {
     console.warn('No spa mapping for number; using default runtime.');
     return defaultRuntime(e164To);
@@ -314,9 +448,45 @@ async function fetchRecentHistory({ messagesSheetId, spaKey, to, from, limit = H
   return out.reverse().slice(-limit);
 }
 
+/* --------------- Booking de-dup (skip identical repeats) ------------ */
+async function hasRecentDuplicateBooking({ bookingsSheetId, spaKey, from, service, when, tz }) {
+  if (!service || !when) return false;
+  const sheets = await getSheetsRO();
+  const resp = await sheets.spreadsheets.values.get({
+    spreadsheetId: bookingsSheetId,
+    range: 'bookings!A:R',
+  });
+  const rows = resp.data.values || [];
+  const now = Date.now();
+
+  // scan last BOOKING_LOOKBACK_ROWS rows
+  for (let i = Math.max(1, rows.length - BOOKING_LOOKBACK_ROWS); i < rows.length; i++) {
+    const r = rows[i];
+    // columns: timestamp_iso | booking_id | spa_id | channel | name | phone | email | service | start_time | timezone | source | notes | staff | status | price | revenue | external_apt_id | utm_campaign
+    const ts     = r[0] || '';
+    const spa    = r[2] || '';
+    const phone  = (r[5] || '').replace(/[^\d]/g,'');
+    const svc    = (r[7] || '').toLowerCase();
+    const start  = (r[8] || '').toLowerCase();
+    const status = (r[13] || '').toLowerCase();
+
+    if (spa !== spaKey) continue;
+    if (phone !== from.replace(/[^\d]/g,'')) continue;
+    if (status !== 'pending') continue;
+
+    // consider duplicate if same service + when within last 48h
+    const ageHrs = isFinite(Date.parse(ts)) ? (now - Date.parse(ts))/3600000 : 0;
+    if (ageHrs > BOOKING_DEDUP_HOURS) continue;
+
+    if (svc === String(service).toLowerCase() && start === String(when).toLowerCase()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /* -------------------------------- Handler --------------------------- */
 exports.handler = async (event) => {
-  // Simple GET health check (no secrets leaked)
   if (event.httpMethod === 'GET') {
     return { statusCode: 200, body: 'OK' };
   }
@@ -342,13 +512,15 @@ exports.handler = async (event) => {
     messagesSheetId,
     bookingsSheetId,
     tz,
+    hours: hoursJson,
     services: svcFromCfg
   } = runtime;
 
   const services = svcFromCfg || DEFAULT_SERVICES;
   const svcIndex = makeServiceIndex(services);
+  const hoursMap = parseHoursMap(hoursJson);
 
-  /* 1) Log inbound (best-effort) */
+  /* 1) Log inbound */
   try {
     await appendRow({
       sheetId: messagesSheetId,
@@ -357,13 +529,12 @@ exports.handler = async (event) => {
     });
   } catch (e) { console.error('Inbound log failed:', e.message); }
 
-  /* 2) Compliance keywords: log & let Twilio Advanced Opt-Out reply */
+  /* 2) Compliance keywords */
   if (OPT_OUT_KEYWORDS.test(body) || OPT_IN_KEYWORDS.test(body) || HELP_KEYWORDS.test(body)) {
     let complianceType = 'compliance';
     if (OPT_OUT_KEYWORDS.test(body)) complianceType = 'optout';
     if (OPT_IN_KEYWORDS.test(body))  complianceType = 'optin';
     if (HELP_KEYWORDS.test(body))    complianceType = 'help';
-
     try {
       await appendRow({
         sheetId: messagesSheetId,
@@ -371,7 +542,7 @@ exports.handler = async (event) => {
         row: [now, spaSheetKey, '-', to, from, 'sms', `inbound:${complianceType}`, body, 'N/A', '']
       });
     } catch (e) { console.error('Compliance log failed:', e.message); }
-
+    // Let Twilio Advanced Opt-Out send the actual SMS
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/xml' },
@@ -390,7 +561,7 @@ exports.handler = async (event) => {
   } else {
     kind = 'ai';
 
-    // Pull recent history (to/from pair) and extract slots
+    // History + slots
     let history = [];
     try {
       history = await fetchRecentHistory({
@@ -400,17 +571,32 @@ exports.handler = async (event) => {
       });
     } catch (e) { console.error('History fetch failed:', e.message); }
 
-    const slots = extractSlotsFromMessages(history, body, svcIndex);
-    const missing = missingFields(slots);
+    let slots = extractSlotsFromMessages(history, body, svcIndex, tz);
+    let missing = missingFields(slots);
+
+    // If date+time exist but outside hours, force asking for a time within the window
+    let hoursHint = '';
+    if (slots.whenDate && slots.whenTime) {
+      const ok = isWithinHours({ ymd: slots.whenDate, hm: slots.whenTime }, tz, hoursMap);
+      if (!ok) {
+        hoursHint = `Open that day: ${openWindowString(slots.whenDate, tz, hoursMap)}.`;
+        // Force time to be re-collected
+        slots.whenTime = '';
+        slots.when = slots.whenDate;
+        missing = missingFields(slots);
+      }
+    }
+
     const serviceLine = services.map(s => s.price ? `${s.key} (~$${s.price})` : s.key).join(', ');
 
-   const systemPrompt =
+    const systemPrompt =
 `You are a helpful receptionist for ${spaDisplayName}.
 Tone: friendly, concise, professional.
 You DO NOT have live calendar access; never promise confirmed availability.
 Use prior context; short follow-ups like “will it work?” refer to the most recent unresolved request.
 Business timezone: ${tz}.
 Services: ${serviceLine || 'standard services'}.
+If time proposed is outside opening hours on the chosen date, ask for a time within the open window. ${hoursHint ? 'Hint: ' + hoursHint : ''}
 
 Known so far:
 - Service: ${slots.service || '—'}
@@ -437,32 +623,49 @@ Behavior:
       reply = (completion.choices?.[0]?.message?.content || '').trim();
       if (!reply) throw new Error('Empty AI reply');
 
-      // If all slots present → log a pending booking row
+      // Only append booking if we have a complete & in-hours set of slots
       if (missing.length === 0) {
+        // ensure we have “YYYY-MM-DD HH:mm”
+        const when = `${slots.whenDate} ${slots.whenTime}`.trim();
+
+        // Skip identical duplicates from same phone/spa within the last 48h
+        let isDup = false;
         try {
-          await appendRow({
-            sheetId: bookingsSheetId,
-            tabName: 'bookings',
-            row: [
-              now,                 // timestamp_iso
-              '',                  // booking_id
-              spaSheetKey,         // spa_id (use spa_id if you prefer)
-              'sms',               // channel
-              slots.name,          // name
-              from,                // phone
-              '',                  // email
-              slots.service,       // service
-              slots.when,          // start_time (free-form for now)
-              tz || '',            // timezone
-              'sms',               // source
-              '',                  // notes
-              '',                  // staff
-              'pending',           // status
-              '',                  // price
-              ''                   // revenue
-            ]
+          isDup = await hasRecentDuplicateBooking({
+            bookingsSheetId, spaKey: spaSheetKey, from, service: slots.service, when, tz
           });
-        } catch (e) { console.error('Pending booking log failed:', e.message); }
+        } catch (e) {
+          console.error('De-dup scan failed:', e.message);
+        }
+
+        if (!isDup) {
+          try {
+            await appendRow({
+              sheetId: bookingsSheetId,
+              tabName: 'bookings',
+              row: [
+                now,                 // timestamp_iso
+                '',                  // booking_id
+                spaSheetKey,         // spa_id (or use strict spa_id if you prefer)
+                'sms',               // channel
+                slots.name,          // name
+                from,                // phone
+                '',                  // email
+                slots.service,       // service
+                when,                // start_time -> concrete date & time
+                tz || '',            // timezone
+                'sms',               // source
+                '',                  // notes
+                '',                  // staff
+                'pending',           // status
+                '',                  // price
+                '',                  // revenue
+                '',                  // external_apt_id
+                ''                   // utm_campaign
+              ]
+            });
+          } catch (e) { console.error('Pending booking log failed:', e.message); }
+        }
       }
     } catch (e) {
       console.error('OpenAI error:', e.message);
