@@ -1,3 +1,152 @@
+function looksLikeBooking(body, idx) {
+  const t = String(body || '');
+  if (BOOK_KEYWORDS.test(t)) return true;
+  const hasService = !!pickService(t, idx);
+  const hasDateOrTime = !!extractDateHint(t) || !!extractTimeHint(t);
+  const hasFor = /\b(for\b|book\s+under\b)/i.test(t);
+  return (hasService && hasDateOrTime) || (hasFor && (hasDateOrTime || hasService));
+}
+
+async function advanceBookingFSM({ runtime, from, to, body, activeBookings, servicesIdx, hoursMap }) {
+  const { spaSheetKey, messagesSheetId, tz } = runtime;
+  const phoneKey = normalize(from);
+  const key = `${spaSheetKey}|${phoneKey}`;
+  const nowISO = new Date().toISOString();
+  let session = bookingStateMemo.get(key);
+  if (!session) session = { phone: phoneKey, spa: spaSheetKey, state: 'idle', data: {}, lastUpdatedISO: nowISO };
+
+  // Timeout: reset if >24h
+  const last = Date.parse(session.lastUpdatedISO || 0);
+  if (isFinite(last) && Date.now() - last > 24*3600*1000) {
+    session = { phone: phoneKey, spa: spaSheetKey, state: 'idle', data: {}, lastUpdatedISO: nowISO };
+  }
+
+  const text = String(body || '');
+  const lower = text.toLowerCase();
+  // Simple CHANGE handling: restart at name
+  if (CHANGE_KEYWORDS.test(lower) || NEW_KEYWORDS.test(lower)) {
+    session.state = 'awaiting_name';
+    session.data = {};
+    session.lastUpdatedISO = nowISO;
+    bookingStateMemo.set(key, session);
+    await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
+    return { reply: 'No problem — what name should I put this under?' };
+  }
+
+  // State machine
+  if (session.state === 'idle') session.state = 'awaiting_name';
+
+  // Try to capture all-at-once info
+  const svc = pickService(text, servicesIdx);
+  const dateHint = extractDateHint(text);
+  const timeHint = extractTimeHint(text);
+  const nm = extractForName(text) || nameFrom(text, servicesIdx);
+  if (nm && !session.data.name) session.data.name = titleCase(nm);
+  if (dateHint && !session.data.ymd) session.data.ymd = normalizeDateHint(dateHint, tz);
+  if (timeHint && !session.data.hhmm) session.data.hhmm = normalizeTimeHint(timeHint);
+  if (svc && !session.data.service) session.data.service = svc;
+
+  // Progression
+  if (!session.data.name) {
+    session.state = 'awaiting_name';
+    session.lastUpdatedISO = nowISO;
+    bookingStateMemo.set(key, session);
+    await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
+    return { reply: 'What name should I put this under?' };
+  }
+  if (!session.data.ymd || !session.data.hhmm) {
+    session.state = 'awaiting_datetime';
+    session.lastUpdatedISO = nowISO;
+    bookingStateMemo.set(key, session);
+    await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
+    return { reply: 'What date and time would you like?' };
+  }
+  // Validate hours before asking service
+  if (!withinHours(session.data.ymd, session.data.hhmm, tz, hoursMap)) {
+    const y = session.data.ymd;
+    let windowText = 'our regular hours';
+    if (hoursMap && y) {
+      const dow = new Intl.DateTimeFormat('en-US', { weekday:'short', timeZone: tz })
+        .format(new Date(`${y}T00:00:00Z`)).toLowerCase().slice(0,3);
+      const di = { sun:0, mon:1, tue:2, wed:3, thu:4, fri:5, sat:6 }[dow];
+      const cfg = hoursMap?.[di];
+      windowText = cfg ? `${cfg.open}–${cfg.close} ${tz}` : 'closed';
+    }
+    session.state = 'awaiting_datetime';
+    session.data.ymd = '';
+    session.data.hhmm = '';
+    session.lastUpdatedISO = nowISO;
+    bookingStateMemo.set(key, session);
+    await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
+    return { reply: windowText === 'closed' ? 'We’re closed that day. Another day/time?' : `That time is outside our hours (${windowText}). Another time?` };
+  }
+  if (!session.data.service) {
+    session.state = 'awaiting_service';
+    session.lastUpdatedISO = nowISO;
+    bookingStateMemo.set(key, session);
+    await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
+    const offered = (runtime.services || DEFAULT_SERVICES).map(s => s.key).join(', ');
+    return { reply: `Which service? We offer: ${offered}.` };
+  }
+
+  // Ready to confirm — duplicate guard first
+  const whenNice = niceWhen(session.data.ymd, session.data.hhmm, tz);
+  const proposing = {
+    name: session.data.name,
+    service: session.data.service,
+    ymd: session.data.ymd,
+    hhmm: session.data.hhmm
+  };
+
+  if (isDuplicateBooking(activeBookings, proposing)) {
+    session.state = 'awaiting_datetime';
+    session.data.ymd = '';
+    session.data.hhmm = '';
+    session.lastUpdatedISO = nowISO;
+    bookingStateMemo.set(key, session);
+    await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
+    const dupMsg = `You already have ${session.data.service} for ${session.data.name} on ${whenNice}. Do you want another time or to reschedule the existing one?`;
+    return { reply: dupMsg };
+  }
+
+  // Persist session state
+  session.state = 'awaiting_confirm';
+  session.lastUpdatedISO = nowISO;
+  bookingStateMemo.set(key, session);
+  await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
+
+  // Log a confirm_request so the CONFIRM handler can find it
+  const confirmText = `Just to make sure I’ve got this right: ${session.data.name} — ${session.data.service} on ${whenNice}. If that looks perfect, just reply CONFIRM. Or say CHANGE if you want to adjust.`;
+
+  try {
+    await appendRow({
+      sheetId: messagesSheetId,
+      tabName: 'messages',
+      row: [
+        new Date().toISOString(),
+        spaSheetKey,
+        '-',
+        to,
+        from,
+        'sms',
+        'outbound:confirm_request',
+        confirmText,
+        'N/A',
+        buildProposalJSON({
+          name: session.data.name,
+          service: session.data.service,
+          date: session.data.ymd,
+          time: session.data.hhmm,
+          tz
+        })
+      ]
+    });
+  } catch (e) {
+    console.error('FSM confirm_request log failed:', e.message);
+  }
+
+  return { reply: confirmText };
+}
 // netlify/functions/sms.js
 // -----------------------------------------------------------------------------
 // Combines your "conversational" flow with the newer structured flow:
@@ -55,11 +204,15 @@ const HISTORY_WINDOW_HOURS = Number(process.env.HISTORY_HOURS || (24 * 7)); // 7
 
 /* ----------------------- Compliance / intents ----------------------- */
 const NEW_KEYWORDS     = /\b(new|another|add|book (?:another|new))\b/i;
+const BOOK_KEYWORDS    = /\b(book|booking|appointment|schedule)\b/i;
 const CHANGE_KEYWORDS  = /\b(change|instead|different|reschedule|modify|move)\b/i;
 const CANCEL_KEYWORDS  = /\b(cancel|delete|remove|drop)\b/i;
 const OPT_OUT_KEYWORDS = /^(stop|cancel|end|optout|quit|revoke|stopall|unsubscribe)$/i;
 const OPT_IN_KEYWORDS  = /^(start|unstop|yes)$/i;
 const HELP_KEYWORDS    = /^(help)$/i;
+
+// In-memory FSM store for warm instances
+const bookingStateMemo = new Map(); // key: `${spa}|${phone}` -> BookingState
 
 /* -------------------------------- Utils ----------------------------- */
 function normalize(num) {
@@ -98,7 +251,7 @@ async function getSheetsRO() {
 // Google Sheets (read-write)
 async function getSheetsRW() {
   const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
-  const privateKey  = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\n/g, '\n');
+  const privateKey  = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
   if (!clientEmail || !privateKey) throw new Error('Missing GOOGLE_CLIENT_EMAIL / GOOGLE_PRIVATE_KEY');
 
   const auth = new google.auth.JWT(
@@ -556,6 +709,38 @@ async function getSheetsROValues(spreadsheetId, range) {
   const r = await s.spreadsheets.values.get({ spreadsheetId, range });
   return (r.data.values || []);
 }
+async function loadBookingSession({ messagesSheetId, spaKey, to, from }) {
+  const rows = await getSheetsROValues(messagesSheetId, 'messages!A:J');
+  const normTo = normalize(to), normFrom = normalize(from);
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i];
+    if (!r || r.length < 10) continue;
+    const spa    = r[1] || '';
+    const To     = normalize(r[3] || '');
+    const From   = normalize(r[4] || '');
+    const status = (r[6] || '').toString();
+    const notes  = (r[9] || '').toString();
+    if (spa !== spaKey) continue;
+    const pair = (To === normFrom && From === normTo) || (To === normTo && From === normFrom);
+    if (!pair) continue;
+    if (status !== 'session:booking') continue;
+    try {
+      const json = JSON.parse(notes);
+      if (json && json.state) return json;
+    } catch(_) {}
+  }
+  return null;
+}
+async function saveBookingSession({ messagesSheetId, spaKey, to, from, session }) {
+  const payload = JSON.stringify(session);
+  await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [new Date().toISOString(), spaKey, '-', to, from, 'sms', 'session:booking', '(session)', 'N/A', payload] });
+}
+async function clearBookingSession({ messagesSheetId, spaKey, to, from, key }) {
+  const nowISO = new Date().toISOString();
+  const session = { phone: key.split('|')[1], spa: spaKey, state: 'idle', data: {}, lastUpdatedISO: nowISO };
+  await saveBookingSession({ messagesSheetId, spaKey, to, from, session });
+  bookingStateMemo.set(key, session);
+}
 async function findPendingProposal({ messagesSheetId, spaKey, to, from }) {
   const rows = await getSheetsROValues(messagesSheetId, 'messages!A:J');
   const normTo = normalize(to), normFrom = normalize(from);
@@ -715,8 +900,18 @@ exports.handler = async (event) => {
     // Confirm the most recent proposal for this to/from pair
     let created = false, reply;
     try {
-      const proposal = await findPendingProposal({ messagesSheetId, spaKey: spaSheetKey, to, from });
+      let proposal = await findPendingProposal({ messagesSheetId, spaKey: spaSheetKey, to, from });
+      if (!proposal) {
+        const fsmKey = `${spaSheetKey}|${normalize(from)}`;
+        const session = bookingStateMemo.get(fsmKey);
+        if (session && session.state === 'awaiting_confirm' && session.data?.name && session.data?.service && session.data?.ymd && session.data?.hhmm) {
+          proposal = { name: session.data.name, service: session.data.service, date: session.data.ymd, time: session.data.hhmm, tz };
+        }
+      }
       if (proposal) {
+        // If we had an FSM session awaiting_confirm, reset it
+        const fsmKey = `${spaSheetKey}|${normalize(from)}`;
+        if (bookingStateMemo.has(fsmKey)) await clearBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, key: fsmKey });
         const { name, service, date, time } = proposal;
 
         // write full-width row (matches your Ops->bookings header)
@@ -798,6 +993,13 @@ exports.handler = async (event) => {
     let candidates = activeBookings;
     if (hintedName) candidates = candidates.filter(b => titleCase(b.name) === titleCase(hintedName));
 
+    if (candidates.length === 0) {
+      const lines = activeBookings.slice(0, 5).map(b => `${titleCase(b.name)} — ${b.service} — ${niceWhen(b.ymd, b.hhmm, b.tz || tz)}`);
+      const reply = `I couldn’t find that booking. Which appointment should I cancel?\n- ${lines.join('\n- ')}`;
+      const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
+      try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
+      return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
+    }
     if (candidates.length > 1) {
       const lines = candidates.slice(0, 5).map(b => `${titleCase(b.name)} — ${b.service} — ${niceWhen(b.ymd, b.hhmm, b.tz || tz)}`);
       const reply = `Which appointment should I cancel?\n- ${lines.join('\n- ')}\nReply with the service and date (e.g., "cancel massage Tue 11:00").`;
@@ -817,6 +1019,10 @@ exports.handler = async (event) => {
         const reply = `All set — I’ve cancelled ${titleCase(toCancel.name)}’s ${toCancel.service} on ${niceWhen(toCancel.ymd, toCancel.hhmm, toCancel.tz || tz)}.`;
         const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
         try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
+        try {
+          const fsmKey = `${spaSheetKey}|${normalize(from)}`;
+          await clearBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, key: fsmKey });
+        } catch (e) { console.error('clearBookingSession (cancel) failed:', e.message); }
         return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
       } catch (e) {
         console.error('Cancel update failed:', e.message);
@@ -824,6 +1030,10 @@ exports.handler = async (event) => {
         const reply = `I couldn’t update that just now, but I’ve flagged it for our team.`;
         const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
         try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
+        try {
+          const fsmKey = `${spaSheetKey}|${normalize(from)}`;
+          await clearBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, key: fsmKey });
+        } catch (e2) { console.error('clearBookingSession (cancel) failed:', e2.message); }
         return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
       }
     }
@@ -860,6 +1070,20 @@ exports.handler = async (event) => {
       const newYmd = newDateHint ? normalizeDateHint(newDateHint, tz) : '';
       const newHhmm = newTimeHint ? normalizeTimeHint(newTimeHint) : '';
       if (newYmd && newHhmm) {
+        if (!withinHours(newYmd, newHhmm, tz, hoursMap)) {
+          const dow = new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: tz })
+            .format(new Date(`${newYmd}T00:00:00Z`)).toLowerCase().slice(0,3);
+          const di = { sun:0, mon:1, tue:2, wed:3, thu:4, fri:5, sat:6 }[dow];
+          const cfg = hoursMap?.[di];
+          const windowText = cfg ? `${cfg.open}–${cfg.close} ${tz}` : 'closed';
+          const reply = windowText === 'closed'
+            ? `We’re closed that day. Could you pick another day/time?`
+            : `That time is outside our hours (${windowText}). Another time?`;
+
+          const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
+          try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
+          return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
+        }
         try {
           const rows = await getSheetsROValues(bookingsSheetId, `bookings!A${pick.rowIndex}:Q${pick.rowIndex}`);
           const row = padRowToQ(rows[0] || []);
@@ -868,6 +1092,10 @@ exports.handler = async (event) => {
           const reply = `Done — I’ve moved ${titleCase(pick.name)}’s ${pick.service} to ${niceWhen(newYmd, newHhmm, pick.tz || tz)}.`;
           const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
           try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
+          try {
+            const fsmKey = `${spaSheetKey}|${normalize(from)}`;
+            await clearBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, key: fsmKey });
+          } catch (e) { console.error('clearBookingSession (reschedule) failed:', e.message); }
           return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
         } catch (e) {
           console.error('Reschedule update failed:', e.message);
@@ -875,6 +1103,10 @@ exports.handler = async (event) => {
           const reply = `I couldn’t update that just now, but I’ve flagged it for our team.`;
           const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
           try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
+          try {
+            const fsmKey = `${spaSheetKey}|${normalize(from)}`;
+            await clearBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, key: fsmKey });
+          } catch (e2) { console.error('clearBookingSession (reschedule) failed:', e2.message); }
           return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
         }
       } else {
@@ -886,7 +1118,32 @@ exports.handler = async (event) => {
     }
   }
 
-  /* 5) AI path */
+  // Load or hydrate FSM session
+  const fsmKey = `${spaSheetKey}|${normalize(from)}`;
+  if (!bookingStateMemo.has(fsmKey)) {
+    try {
+      const persisted = await loadBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from });
+      if (persisted && persisted.spa === spaSheetKey) bookingStateMemo.set(fsmKey, persisted);
+    } catch (e) { console.error('loadBookingSession failed:', e.message); }
+  }
+
+  // Router: FSM vs Q&A vs AI booking flow
+  const looksBooking = looksLikeBooking(body, svcIndex);
+  const session = bookingStateMemo.get(fsmKey);
+  if (session && session.state !== 'idle') {
+    const { reply } = await advanceBookingFSM({ runtime, from, to, body, activeBookings, servicesIdx: svcIndex, hoursMap });
+    const tw = new twilio.twiml.MessagingResponse(); tw.message(reply);
+    try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
+    return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: tw.toString() };
+  }
+  if (looksBooking) {
+    const { reply } = await advanceBookingFSM({ runtime, from, to, body, activeBookings, servicesIdx: svcIndex, hoursMap });
+    const tw = new twilio.twiml.MessagingResponse(); tw.message(reply);
+    try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
+    return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: tw.toString() };
+  }
+
+  /* 5) AI path (Q&A default) */
   let history = [];
   try {
     history = await fetchRecentHistory({ messagesSheetId, spaKey: spaSheetKey, to, from });
@@ -899,148 +1156,30 @@ exports.handler = async (event) => {
     effectiveHistory = [{ role: 'user', content: body }];
   }
 
-  // ---------- Heuristics with "latest message wins" ----------
-  const slotsHeu = (() => {
-    const s = { service: '', dateHint: '', timeHint: '', name: '' };
-
-    function apply(text, prefer = false) {
-      if (!text) return;
-      const svc = pickService(text, svcIndex);
-      const d   = extractDateHint(text);
-      const t   = extractTimeHint(text);
-      const nm  = nameFrom(text, svcIndex);
-
-      // if prefer==true (current message), override any prior value
-      if (svc && (prefer || !s.service))   s.service  = svc;
-      if (d   && (prefer || !s.dateHint))  s.dateHint = d;
-      if (t   && (prefer || !s.timeHint))  s.timeHint = t;
-      if (nm  && (prefer || !s.name))      s.name     = nm;
+  // Conversational Q&A only (no booking proposals here)
+  try {
+    const facts = [];
+    if (activeBookings.length) {
+      const lines = activeBookings.slice(0,4).map(b => `${titleCase(b.name)} — ${b.service} — ${niceWhen(b.ymd, b.hhmm, b.tz || tz)} (${b.status})`);
+      facts.push(`Known bookings for this number:\n- ${lines.join('\n- ')}`);
     }
+    const offered = (services || DEFAULT_SERVICES).map(s => s.key).join(', ');
+    if (offered) facts.push(`Services we offer: ${offered}.`);
 
-    // read older user turns first (context), then override with current message
-    for (const m of history) if (m.role === 'user') apply(m.content, false);
-    apply(body, true);
-    return s;
-  })();
+    const sys = `You are a friendly, concise receptionist for ${spaDisplayName}. \nAnswer the user's question conversationally. \nDo not initiate booking; if the user asks to book, ask for the name first and wait for their reply.\n${facts.length ? `\nContext:\n${facts.join('\n')}\n` : ''}`;
 
-  // If anything missing, run a tight LLM extractor with context facts
-  let slotsLLM = { service:'', dateHint:'', timeHint:'', name:'' };
-  const needsLLM = !slotsHeu.service || !slotsHeu.dateHint || !slotsHeu.timeHint || !slotsHeu.name;
-  if (needsLLM) {
-    try {
-      const existingFacts = activeBookings.slice(0, 4).map(b => `${titleCase(b.name)} — ${b.service} — ${niceWhen(b.ymd, b.hhmm, b.tz || tz)} (${b.status})`);
-      const now = nowPartsInTZ(tz);
-      const factsBlock = existingFacts.length ? `Existing bookings for this number:\n- ${existingFacts.join('\n- ')}\n\n` : '';
-      slotsLLM = await llmExtractSlots({ spaDisplayName, tz, services, history: effectiveHistory, userText: body, prefaceSys: `${factsBlock}` });
-    } catch (e) {
-      console.error('LLM extract failed:', e.message);
-    }
-  }
-
-  // Merge (prefer heuristics; they already prioritize the latest user text)
-  let merged = {
-    service : slotsHeu.service  || slotsLLM.service,
-    dateHint: slotsHeu.dateHint || slotsLLM.dateHint,
-    timeHint: slotsHeu.timeHint || slotsLLM.timeHint,
-    name    : slotsHeu.name     || slotsLLM.name
-  };
-
-  // Known-name rules: if "for X" matches a known name, pin it; else single known
-  const forName = /(?:for|for\s+my)\s+([A-Z][A-Za-z'’\-]{1,29})/.exec(body);
-  if (forName) {
-    const guess = titleCase(forName[1]);
-    const hit = knownNames.find(n => n.toLowerCase() === guess.toLowerCase());
-    if (hit) merged.name = hit;
-  }
-  if (!merged.name && knownNames.length === 1) merged.name = knownNames[0];
-
-  const normDate = normalizeDateHint(merged.dateHint, tz);
-  const normTime = normalizeTimeHint(merged.timeHint);
-  const missing = [];
-  if (!merged.service) missing.push('service');
-  if (!normDate)       missing.push('date');
-  if (!normTime)       missing.push('time');
-  if (!merged.name)    missing.push('name');
-
-  // If name is missing, try a secondary pass: extract "for X" or "book under X" and prefer knownNames
-  if (missing.includes('name')) {
-    const guessName = extractForName(body) || nameFrom(body, svcIndex);
-    if (guessName) {
-      const hit = knownNames.find(n => n.toLowerCase() === guessName.toLowerCase());
-      if (hit) {
-        merged.name = hit;
-        const idx = missing.indexOf('name'); if (idx >= 0) missing.splice(idx, 1);
-      }
-    }
-  }
-
-  // If still missing name, ask explicitly before proposing
-
-  // ---------- Ask only for what's missing, in a friendly, natural tone ----------
-  if (missing.length) {
-    const systemPrompt =
-`You are a friendly, conversational receptionist for ${spaDisplayName}. Be warm but concise.
-Ask ONLY for the missing piece(s): ${missing.join(', ')}.
-Never promise availability. If the guest said "change" or similar, ignore earlier suggestions and rebuild from their latest message.`;
-
-    const content = await openaiChat(
-      [{ role: 'system', content: systemPrompt }, ...effectiveHistory, { role: 'user', content: body }],
+    const reply = await openaiChat(
+      [{ role: 'system', content: sys }, ...effectiveHistory, { role: 'user', content: body }],
       { temperature: 0.3 }
     );
 
-    const reply = content || `Got it — could you share the missing details (${missing.join(', ')})?`;
-
-    const twiml = new twilio.twiml.MessagingResponse();
-    twiml.message(reply);
-    try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:ai', reply, 'N/A', ''] }); } catch {}
+    const text = reply || `Happy to help. What can I clarify?`;
+    const twiml = new twilio.twiml.MessagingResponse(); twiml.message(text);
+    try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:ai', text, 'N/A', ''] }); } catch {}
     return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
-  }
-
-  // ---------- Enforce open hours if provided ----------
-  const okHours = withinHours(normDate, normTime, tz, hoursMap);
-  if (!okHours) {
-    let windowText = 'our regular hours that day';
-    if (hoursMap) {
-      const dow = new Intl.DateTimeFormat('en-US', { weekday:'short', timeZone: tz })
-                    .format(new Date(`${normDate}T00:00:00Z`)).toLowerCase().slice(0,3);
-      const di = { sun:0, mon:1, tue:2, wed:3, thu:4, fri:5, sat:6 }[dow];
-      const cfg = hoursMap?.[di];
-      windowText = cfg ? `${cfg.open}–${cfg.close} ${tz}` : 'closed';
-    }
-    const reply = windowText === 'closed'
-      ? `We’re closed that day. Could you pick another day/time?`
-      : `We’re open ${windowText}. Could you pick a time within those hours?`;
-
-    const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
-    try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
-    return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
-  }
-
-  // Duplicate guard before proposing
-  const proposing = { name: merged.name, service: merged.service, ymd: normDate, hhmm: normTime };
-  if (isDuplicateBooking(activeBookings, proposing)) {
-    const dupMsg = `You already have ${merged.service} for ${merged.name} on ${niceWhen(normDate, normTime, tz)}. Do you want another time or to reschedule the existing one?`;
-    const tw = new twilio.twiml.MessagingResponse();
-    tw.message(dupMsg);
-    try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', dupMsg, 'N/A', ''] }); } catch {}
+  } catch (e) {
+    console.error('Q&A generation failed:', e.message);
+    const tw = new twilio.twiml.MessagingResponse(); tw.message('Got it. How can I help further?');
     return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: tw.toString() };
   }
-
-  // ---------- All pieces present -> propose & ask for CONFIRM ----------
-  const whenNice = niceWhen(normDate, normTime, tz);
-  const proposal = { name: merged.name, service: merged.service, date: normDate, time: normTime, tz };
-  const confirmText = `Just to make sure I’ve got this right: ${merged.name} — ${merged.service} on ${whenNice}. If that looks perfect, just reply CONFIRM. Or say CHANGE if you want to adjust.`;
-
-  const twiml = new twilio.twiml.MessagingResponse();
-  twiml.message(confirmText);
-
-  try {
-    await appendRow({
-      sheetId: messagesSheetId,
-      tabName: 'messages',
-      row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:confirm_request', confirmText, 'N/A', buildProposalJSON(proposal)]
-    });
-  } catch (e) { console.error('Outbound(confirmation) log failed:', e.message); }
-
-  return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
 };
