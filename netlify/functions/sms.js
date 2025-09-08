@@ -112,7 +112,6 @@ function pickService(text, idx) {
 }
 
 /* -------------------------- Slot extraction ------------------------- */
-// More permissive time; better weekday/month patterns; robust name phrases
 const timeRe  = /\b(?:[01]?\d|2[0-3])(?::\d{2})?\s*(?:am|pm)?\b/i;
 const dayRe   = /\b(?:mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b/i;
 const dateRe  = /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/;
@@ -145,8 +144,6 @@ function nameFrom(text, idx) {
     const nm = titleCase(m1[1]);
     if (!NAME_STOPWORDS.has(nm.toLowerCase())) return nm;
   }
-
-  // “Capitalized word” fallback (but avoid services/days/months/greetings)
   const cap = /\b([A-Z][a-z]{1,29})\b/.exec(t);
   if (cap) {
     const nm = cap[1];
@@ -206,7 +203,6 @@ function normalizeDateHint(hint, tz) {
     const monthIdx = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,sept:9,oct:10,nov:11,dec:12}[m1[1].slice(0,3).toLowerCase()];
     const dd = +m1[2];
     let yy = m1[3] ? +m1[3] : year;
-    // if in the past this year, roll to next
     const candidate = ymdToDate(yy, monthIdx, dd);
     if (candidate < today) yy += 1;
     return formatYMD(yy, monthIdx, dd);
@@ -441,7 +437,6 @@ function buildProposalJSON({ name, service, date, time, tz }) {
 }
 
 /* ----------------------- LLM slot extraction pass ------------------- */
-// When heuristics miss, ask the model to extract structured fields from context.
 async function llmExtractSlots({ spaDisplayName, tz, services, history, userText }) {
   const now = nowPartsInTZ(tz);
   const svcKeys = (services || []).map(s => s.key);
@@ -503,7 +498,7 @@ exports.handler = async (event) => {
 
   const services = svcFromCfg || DEFAULT_SERVICES;
   const svcIndex = makeServiceIndex(services);
-  const hoursMap = parseHours(hours);
+  const hoursMap = parseHours(hours); // <-- defined ONCE here
 
   /* 1) Log inbound */
   try {
@@ -661,11 +656,9 @@ Never promise availability.`;
     return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
   }
 
-  // Enforce hours if provided
-  const hoursMap = parseHours(hours);
+  // Enforce hours if provided (reuse the single declaration of hoursMap)
   const okHours = withinHours(normDate, normTime, tz, hoursMap);
   if (!okHours) {
-    // Compute human message about window for that date
     const wd = new Intl.DateTimeFormat('en-US', { weekday:'long', timeZone: tz })
                  .format(new Date(`${normDate}T00:00:00Z`));
     let windowText = 'our regular hours that day';
