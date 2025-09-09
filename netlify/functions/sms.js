@@ -1,10 +1,21 @@
 function looksLikeBooking(body, idx) {
   const t = String(body || '');
-  if (BOOK_KEYWORDS.test(t)) return true;
+  const lower = t.toLowerCase();
+
+  // Hard blocks: route cancel/change to their own flows
+  if (CANCEL_KEYWORDS.test(lower) || CHANGE_KEYWORDS.test(lower)) return false;
+
   const hasService = !!pickService(t, idx);
   const hasDateOrTime = !!extractDateHint(t) || !!extractTimeHint(t);
   const hasFor = /\b(for\b|book\s+under\b)/i.test(t);
-  return (hasService && hasDateOrTime) || (hasFor && (hasDateOrTime || hasService));
+
+  // Strong signals
+  if ((hasService && hasDateOrTime) || (hasFor && (hasDateOrTime || hasService))) return true;
+
+  // Bare booking intent enters FSM at name step
+  if (BOOK_KEYWORDS.test(lower)) return true;
+
+  return false;
 }
 
 async function advanceBookingFSM({ runtime, from, to, body, activeBookings, servicesIdx, hoursMap }) {
@@ -45,14 +56,25 @@ async function advanceBookingFSM({ runtime, from, to, body, activeBookings, serv
   const dateHint = extractDateHint(text);
   const timeHint = extractTimeHint(text);
   const nm = extractForName(text) || nameFrom(text, servicesIdx);
+  // Plain, lowercase name capture when awaiting_name (e.g., "michael")
+  if (!nm && session.state === 'awaiting_name' && !session.data.name) {
+    const plainNameRe = /^[A-Za-z][A-Za-z'’\-]{1,29}(?:\s+[A-Za-z'’\-]{1,29}){0,2}$/;
+    const raw = text.trim();
+    if (plainNameRe.test(raw) && !NAME_STOPWORDS.has(raw.toLowerCase())) {
+      // Prefer a fuzzy match to known names if available
+      const knownNames = Array.from(indexBookingsByName(activeBookings).keys());
+      const hit = knownNames.length ? fuzzyMatchName(raw, knownNames) : '';
+      session.data.name = hit ? hit : titleCase(raw);
+    }
+  }
   
   // Known-name reconciliation
   const knownNames = Array.from(indexBookingsByName(activeBookings).keys());
   
-  // If message includes "for <Name>" and that matches a known name, adopt that spelling immediately
-  if (nm && knownNames.length > 0) {
-    const matchedName = knownNames.find(known => known.toLowerCase() === nm.toLowerCase());
-    if (matchedName && !session.data.name) {
+  // If message includes a name and there's a close known match, adopt that spelling immediately
+  if (nm && knownNames.length > 0 && !session.data.name) {
+    const matchedName = fuzzyMatchName(nm, knownNames);
+    if (matchedName) {
       session.data.name = matchedName; // Use exact known spelling
     }
   }
@@ -77,14 +99,22 @@ async function advanceBookingFSM({ runtime, from, to, body, activeBookings, serv
     session.lastUpdatedISO = nowISO;
     bookingStateMemo.set(key, session);
     await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
-    return { reply: 'Great, I\'ll get you scheduled. What\'s your first name so I can put the booking under?' };
+    return { reply: choose([
+      'Sure — what name should I put this under?',
+      'Happy to help. What\'s the first name for the booking?',
+      'Great — whose name should I use for the booking?'
+    ]) };
   }
   if (!session.data.ymd || !session.data.hhmm) {
     session.state = 'awaiting_datetime';
     session.lastUpdatedISO = nowISO;
     bookingStateMemo.set(key, session);
     await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
-    return { reply: 'Nice — what date and time work for you?' };
+    return { reply: choose([
+      'Nice — what day and time works for you?',
+      'Got it — which day/time would you like?',
+      'Thanks! What\'s a good day and time?'
+    ]) };
   }
   // Check if time has already passed
   if (isPastSlot(session.data.ymd, session.data.hhmm, tz)) {
@@ -117,7 +147,10 @@ async function advanceBookingFSM({ runtime, from, to, body, activeBookings, serv
     bookingStateMemo.set(key, session);
     await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
     const offered = (runtime.services || DEFAULT_SERVICES).map(s => s.key).join(', ');
-    return { reply: `Almost done! Which service would you like to book? We offer ${offered}.` };
+    return { reply: choose([
+      `Almost done! Which service would you like? We offer ${offered}.`,
+      `Great — which service? Options: ${offered}.`
+    ]) };
   }
 
   // Ready to confirm — duplicate guard first
@@ -155,14 +188,15 @@ async function advanceBookingFSM({ runtime, from, to, body, activeBookings, serv
     const y = session.data.ymd;
     const wd = weekdayFromYMD(y);
     const cfg = hoursMap ? hoursMap[wd] : null;
-    const windowText = cfg ? `${cfg.open}–${cfg.close}` : '8:00–20:00';
+    const windowText = cfg ? `${cfg.open}–${cfg.close}` : 'closed';
     session.state = 'awaiting_datetime';
     session.data.ymd = '';
     session.data.hhmm = '';
     session.lastUpdatedISO = nowISO;
     bookingStateMemo.set(key, session);
     await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
-    return { reply: `That time is outside our hours (${windowText}). Another time?` };
+    const replyText = windowText === 'closed' ? 'We\'re closed that day. Could you pick another day/time?' : `That time is outside our hours (${windowText}). Another time?`;
+    return { reply: replyText };
   }
   if (!offeredKeys.includes(String(session.data.service || ''))) {
     session.state = 'awaiting_service';
@@ -236,6 +270,7 @@ const crypto = require('crypto');
 let OpenAI = require('openai'); OpenAI = OpenAI.default || OpenAI;
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 8000 });
+const TRACE = /^true$/i.test(process.env.TRACE_LOGS || '');
 
 /* ------------------------------ Models ------------------------------ */
 const MODEL_PRIMARY  = process.env.OPENAI_MODEL_PRIMARY  || 'gpt-4o';
@@ -292,6 +327,11 @@ function titleCase(s) {
     .split(' ')
     .map(x => x.charAt(0).toUpperCase() + x.slice(1).toLowerCase())
     .join(' ');
+}
+
+function choose(arr) {
+  if (!Array.isArray(arr) || arr.length === 0) return '';
+  return arr[Math.floor(Math.random() * arr.length)];
 }
 
 // Normalize E.164 to canonical digits (reuse normalize())
@@ -435,6 +475,44 @@ function extractForName(text) {
   return '';
 }
 
+// --- Nickname/alias and fuzzy matching helpers ---
+const NICK_ALIASES = {
+  nick: 'nicholas', mike: 'michael', alex: 'alexander', liz: 'elizabeth', beth: 'elizabeth',
+  tony: 'anthony', will: 'william', bill: 'william', chris: 'christopher', kate: 'katherine'
+};
+function normName(s) { return String(s||'').trim().toLowerCase().replace(/[^a-z]/g,''); }
+function aliasName(s) {
+  const n = normName(s);
+  return NICK_ALIASES[n] ? NICK_ALIASES[n] : s;
+}
+function fuzzyMatchName(inputName, knownNames) {
+  if (!inputName || !knownNames?.length) return '';
+  const aliased = aliasName(inputName);
+  const nIn = normName(aliased);
+  // exact
+  for (const k of knownNames) if (normName(k) === nIn) return k;
+  // startsWith either way
+  for (const k of knownNames) {
+    const nk = normName(k);
+    if (nk.startsWith(nIn) || nIn.startsWith(nk)) return k;
+  }
+  // nearest by length diff (fallback)
+  let best = '', bestDiff = Infinity;
+  for (const k of knownNames) {
+    const diff = Math.abs(normName(k).length - nIn.length);
+    if (diff < bestDiff) { best = k; bestDiff = diff; }
+  }
+  return best || '';
+}
+
+// Service includes helper (tolerant of variants and plurals)
+function svcIncludes(candidate, key) {
+  const a = normalizeServiceName(candidate);
+  const b = normalizeServiceName(key);
+  if (!a || !b) return false;
+  return a.includes(b) || b.includes(a);
+}
+
 /* --------------------- Timezone / date utilities -------------------- */
 function nowPartsInTZ(tz) {
   const fmt = new Intl.DateTimeFormat('en-US', {
@@ -476,7 +554,7 @@ function isPastSlot(ymd, hhmm, tz) {
   const nowHM = `${String(now.hour).padStart(2,'0')}:${String(now.minute).padStart(2,'0')}`;
   if (ymd < today) return true;
   if (ymd > today) return false;
-  return hhmm <= nowHM;
+  return hhmm < nowHM;
 }
 function ymdToDate(yyyy, mm, dd)   { return new Date(Date.UTC(yyyy, mm-1, dd)); }
 function formatYMD(yyyy, mm, dd)   { return `${String(yyyy).padStart(4,'0')}-${String(mm).padStart(2,'0')}-${String(dd).padStart(2,'0')}`; }
@@ -571,10 +649,30 @@ function parseHours(hoursJson) {
 function withinHours(ymd, hhmm, tz, hoursMap) {
   if (!ymd || !hhmm) return true;
   const wd = weekdayFromYMD(ymd); // 0=Sun..6=Sat
-  const defaultHours = { open: '08:00', close: '20:00' };
-  const cfg = hoursMap ? (hoursMap[wd] || null) : null;
-  const window = cfg || defaultHours;
-  return hhmm >= window.open && hhmm <= window.close;
+  // If no hours are configured, do not block
+  if (!hoursMap) return true;
+  const cfg = hoursMap[wd] || null;
+  // Explicitly closed if day exists as null
+  if (cfg === null) return false;
+  // Only enforce when a window is configured for that day
+  if (cfg && cfg.open && cfg.close) {
+    return hhmm >= cfg.open && hhmm <= cfg.close;
+  }
+  // No window configured -> do not block
+  return true;
+}
+function tzShortCode(tz) {
+  if (!tz) return '';
+  const tzMap = {
+    'America/New_York': 'ET',
+    'America/Chicago': 'CT',
+    'America/Denver': 'MT',
+    'America/Los_Angeles': 'PT',
+    'America/Phoenix': 'MST',
+    'America/Anchorage': 'AKT',
+    'Pacific/Honolulu': 'HST'
+  };
+  return tzMap[tz] || tz.split('/').pop().slice(0,2).toUpperCase();
 }
 function niceWhen(ymd, hhmm, tz) {
   if (!ymd) return '';
@@ -582,21 +680,7 @@ function niceWhen(ymd, hhmm, tz) {
   const wd = WD_ABBR[weekdayFromYMD(ymd)];
   const mon = MON_ABBR[(M-1)];
   const time12 = hhmm12(hhmm || '00:00');
-  
-  // Add timezone short code for clarity
-  const tzShort = (() => {
-    if (!tz) return '';
-    const tzMap = {
-      'America/New_York': 'ET',
-      'America/Chicago': 'CT', 
-      'America/Denver': 'MT',
-      'America/Los_Angeles': 'PT',
-      'America/Phoenix': 'MST',
-      'America/Anchorage': 'AKT',
-      'Pacific/Honolulu': 'HST'
-    };
-    return tzMap[tz] || tz.split('/').pop().slice(0,2).toUpperCase();
-  })();
+  const tzShort = tzShortCode(tz);
   
   return `${wd}, ${mon} ${D}, ${time12}${tzShort ? ` ${tzShort}` : ''}`;
 }
@@ -606,8 +690,8 @@ function parseStartTimeToYmdHhmm(start_time, tz) {
   const text = String(start_time || '').trim();
   if (!text) return { ymd: '', hhmm: '' };
 
-  // 1) Try direct YYYY-MM-DD HH:mm
-  const m1 = /^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})/.exec(text);
+  // 1) Try direct YYYY-MM-DD HH:mm [TZ]
+  const m1 = /^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})(?:\s+[A-Za-z]{2,4})?$/.exec(text);
   if (m1) return { ymd: m1[1], hhmm: m1[2] };
 
   // 2) Fuzzy like "Sep 9 3pm" or other variants
@@ -658,6 +742,7 @@ async function fetchActiveBookings({ bookingsSheetId, spaKey, phone, tz, lookbac
   console.log(`fetchActiveBookings: spa=${spaKey}, phone=${normPhone}, tz=${tz}, range=${lowerBoundYMD} to ${upperBoundYMD}`);
 
   const out = [];
+  let nonMatchLogs = 0;
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i] || [];
     const spa_id   = r[2] || '';
@@ -668,9 +753,18 @@ async function fetchActiveBookings({ bookingsSheetId, spaKey, phone, tz, lookbac
     const rowTz    = r[9] || tz || '';
     const status   = (r[13] || '').toString().toLowerCase();
 
-    if (spa_id !== spaKey) continue;
-    if (!phonesMatch(phoneCol)) continue;
-    if (!['pending','confirmed'].includes(status)) continue;
+    if (spa_id !== spaKey) {
+      if (TRACE && nonMatchLogs < 3) { console.log('fetchActiveBookings skip: spa mismatch', { row: i+1, spa_id, expected: spaKey }); nonMatchLogs++; }
+      continue;
+    }
+    if (!phonesMatch(phoneCol)) {
+      if (TRACE && nonMatchLogs < 3) { console.log('fetchActiveBookings skip: phone mismatch', { row: i+1, phoneCol, phone }); nonMatchLogs++; }
+      continue;
+    }
+    if (!['pending','confirmed'].includes(status)) {
+      if (TRACE && nonMatchLogs < 3) { console.log('fetchActiveBookings skip: status not active', { row: i+1, status }); nonMatchLogs++; }
+      continue;
+    }
 
     const { ymd, hhmm } = parseStartTimeToYmdHhmm(startStr, rowTz || tz);
     if (!ymd || !hhmm) continue;
@@ -679,6 +773,9 @@ async function fetchActiveBookings({ bookingsSheetId, spaKey, phone, tz, lookbac
     if (ymd < lowerBoundYMD || ymd > upperBoundYMD) continue;
 
     out.push({ name, service, ymd, hhmm, tz: rowTz || tz, status, rowIndex: i + 1 });
+    if (TRACE) {
+      console.log('fetchActiveBookings matched row', { rowIndex: i+1, spa_id, phoneCol, startStr, status });
+    }
   }
   
   console.log(`fetchActiveBookings: found ${out.length} active bookings`);
@@ -958,6 +1055,7 @@ Return ONLY JSON with keys: service, date_text, time_text, name.
 - date_text: user's hint for date (e.g., "tomorrow", "Sep 12", "Friday"); else "".
 - time_text: user's hint for time (e.g., "2pm", "14:30"); else "".
 - name: first + optional last name if stated; else "".
+If the user generally says they want to book but does not provide service and/or date/time, do not infer; leave missing fields empty. Do not ask for their name here.
 Assume current local date/time: ${now.year}-${String(now.month).padStart(2,'0')}-${String(now.day).padStart(2,'0')} ${String(now.hour).padStart(2,'0')}:${String(now.minute).padStart(2,'0')} (${tz}).`;
   const msgs = [
     { role: 'system', content: sys },
@@ -1130,7 +1228,7 @@ TZ: ${tz}`;
             from,                // phone
             '',                  // email
             service,             // service
-            `${date} ${time}`,   // start_time
+            (() => { const z = tzShortCode(tz || ''); return z ? `${date} ${time} ${z}` : `${date} ${time}`; })(),   // start_time
             tz || '',            // timezone
             'sms',               // source
             '',                  // notes
@@ -1193,19 +1291,37 @@ TZ: ${tz}`;
       return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
     }
 
-    const hintedName = extractForName(body) || nameFrom(body, svcIndex);
+    const hintedNameRaw = extractForName(body) || nameFrom(body, svcIndex);
+    const targetByName = fuzzyMatchName(hintedNameRaw, knownNames) || hintedNameRaw || '';
     let candidates = activeBookings;
-    if (hintedName) candidates = candidates.filter(b => titleCase(b.name) === titleCase(hintedName));
+    if (targetByName) candidates = candidates.filter(b => titleCase(b.name) === titleCase(targetByName));
+
+    // Disambiguate using service/date/time hints
+    const svc = pickService(body, svcIndex);
+    const dateHint = extractDateHint(body);
+    const timeHint = extractTimeHint(body);
+    const ymd = dateHint ? normalizeDateHint(dateHint, tz) : '';
+    const hhmm = timeHint ? normalizeTimeHint(timeHint) : '';
+
+    if (svc) {
+      candidates = candidates.filter(b => svcIncludes(b.service, svc));
+    }
+    if (ymd) candidates = candidates.filter(b => b.ymd === ymd);
+    if (hhmm) candidates = candidates.filter(b => round15(b.hhmm) === round15(hhmm));
 
     if (candidates.length === 0) {
-      const lines = activeBookings.slice(0, 5).map(b => `${titleCase(b.name)} — ${b.service} — ${niceWhen(b.ymd, b.hhmm, b.tz || tz)}`);
+      const lines = activeBookings
+        .slice(0, 3)
+        .map(b => `${titleCase(b.name)} — ${b.service} — ${niceWhen(b.ymd, b.hhmm, b.tz || tz)}`);
       const reply = `I couldn’t find that booking. Which appointment should I cancel?\n- ${lines.join('\n- ')}`;
       const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
       try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
       return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
     }
     if (candidates.length > 1) {
-      const lines = candidates.slice(0, 5).map(b => `${titleCase(b.name)} — ${b.service} — ${niceWhen(b.ymd, b.hhmm, b.tz || tz)}`);
+      const lines = candidates
+        .slice(0, 5)
+        .map(b => `${titleCase(b.name)} — ${b.service} — ${niceWhen(b.ymd, b.hhmm, b.tz || tz)}`);
       const reply = `Which appointment should I cancel?\n- ${lines.join('\n- ')}\nReply with the service and date (e.g., "cancel massage Tue 11:00").`;
       const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
       try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
@@ -1250,7 +1366,7 @@ TZ: ${tz}`;
     let targetName = '';
     const hintedName = extractForName(body) || nameFrom(body, svcIndex);
     if (hintedName) {
-      const hit = knownNames.find(n => n.toLowerCase() === hintedName.toLowerCase());
+      const hit = fuzzyMatchName(hintedName, knownNames);
       if (hit) targetName = hit;
     }
     if (!targetName && knownNames.length > 1) {
@@ -1266,10 +1382,17 @@ TZ: ${tz}`;
     const todayYMD = `${String(nowParts.year).padStart(4,'0')}-${String(nowParts.month).padStart(2,'0')}-${String(nowParts.day).padStart(2,'0')}`;
     const nowHM = `${String(nowParts.hour).padStart(2,'0')}:${String(nowParts.minute).padStart(2,'0')}`;
     
-    const candidates = activeBookings
+    let candidates = activeBookings
       .filter(b => (targetName ? titleCase(b.name) === targetName : true))
       .filter(b => (b.ymd > todayYMD) || (b.ymd === todayYMD && b.hhmm > nowHM))
       .sort((a, b) => (a.ymd.localeCompare(b.ymd) || a.hhmm.localeCompare(b.hhmm)));
+
+    // If service mentioned, prefer matching service
+    const svc = pickService(body, svcIndex);
+    if (svc) {
+      const filtered = candidates.filter(b => svcIncludes(b.service, svc));
+      if (filtered.length) candidates = filtered;
+    }
 
     const pick = candidates[0] || activeBookings[0];
     if (pick) {
@@ -1300,7 +1423,8 @@ TZ: ${tz}`;
         try {
           const rows = await getSheetsROValues(bookingsSheetId, `bookings!A${pick.rowIndex}:Q${pick.rowIndex}`);
           const row = padRowToQ(rows[0] || []);
-          row[8] = `${newYmd} ${newHhmm}`; // start_time col I (index 8)
+          const z = tzShortCode(pick.tz || tz || '');
+          row[8] = z ? `${newYmd} ${newHhmm} ${z}` : `${newYmd} ${newHhmm}`; // start_time col I (index 8)
           await updateBookingFields({ spreadsheetId: bookingsSheetId, rowIndex: pick.rowIndex, updatesArray: row });
           const reply = `Done — I’ve moved ${titleCase(pick.name)}’s ${pick.service} to ${niceWhen(newYmd, newHhmm, pick.tz || tz)}.`;
           const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
@@ -1381,14 +1505,23 @@ TZ: ${tz}`;
     const offered = (services || DEFAULT_SERVICES).map(s => s.key).join(', ');
     if (offered) facts.push(`Services we offer: ${offered}.`);
 
-    const sys = `You are a friendly, concise receptionist for ${spaDisplayName}. Answer conversationally. Do not initiate booking yourself. If the user asks to book, ask for their name and let the guided steps handle it.\n${facts.length ? `\nContext:\n${facts.join('\n')}\n` : ''}`;
+    const sys = `You are a friendly, concise receptionist for ${spaDisplayName}. Answer conversationally.
+Do not initiate booking yourself.
+If the user says they want to book but does not provide service and a date/time, reply exactly: "Of course! Please tell me the service and a day/time you’d like."
+Do not ask for their name at this stage — the guided steps will handle it once service and time are provided.
+${facts.length ? `\nContext:\n${facts.join('\n')}\n` : ''}`;
 
     const reply = await openaiChat(
       [{ role: 'system', content: sys }, ...effectiveHistory, { role: 'user', content: body }],
       { temperature: 0.3 }
     );
 
-    const text = reply || `Happy to help. What can I clarify?`;
+    let text = reply || `Happy to help. What can I clarify?`;
+    // Guardrail: avoid accidental booking confirmations in Q&A mode
+    const guardRe = /\b(reply\s+confirm|confirm\s+to\s+book)\b/i;
+    if (guardRe.test(text)) {
+      text = 'Happy to help — would you like to book? I can take your name and get started.';
+    }
     const twiml = new twilio.twiml.MessagingResponse(); twiml.message(text);
     try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:ai', text, 'N/A', ''] }); } catch {}
   return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
