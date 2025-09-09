@@ -15,9 +15,12 @@ async function advanceBookingFSM({ runtime, from, to, body, activeBookings, serv
   let session = bookingStateMemo.get(key);
   if (!session) session = { phone: phoneKey, spa: spaSheetKey, state: 'idle', data: {}, lastUpdatedISO: nowISO };
 
+  console.log(`advanceBookingFSM: ${key} state=${session.state} data=${JSON.stringify(session.data)}`);
+
   // Timeout: reset if >24h
   const last = Date.parse(session.lastUpdatedISO || 0);
   if (isFinite(last) && Date.now() - last > 24*3600*1000) {
+    console.log(`advanceBookingFSM: session timeout for ${key}, resetting to idle`);
     session = { phone: phoneKey, spa: spaSheetKey, state: 'idle', data: {}, lastUpdatedISO: nowISO };
   }
 
@@ -25,6 +28,7 @@ async function advanceBookingFSM({ runtime, from, to, body, activeBookings, serv
   const lower = text.toLowerCase();
   // Simple CHANGE handling: restart at name
   if (CHANGE_KEYWORDS.test(lower) || NEW_KEYWORDS.test(lower)) {
+    console.log(`advanceBookingFSM: CHANGE/NEW detected for ${key}, resetting to awaiting_name`);
     session.state = 'awaiting_name';
     session.data = {};
     session.lastUpdatedISO = nowISO;
@@ -41,10 +45,31 @@ async function advanceBookingFSM({ runtime, from, to, body, activeBookings, serv
   const dateHint = extractDateHint(text);
   const timeHint = extractTimeHint(text);
   const nm = extractForName(text) || nameFrom(text, servicesIdx);
+  
+  // Known-name reconciliation
+  const knownNames = Array.from(indexBookingsByName(activeBookings).keys());
+  
+  // If message includes "for <Name>" and that matches a known name, adopt that spelling immediately
+  if (nm && knownNames.length > 0) {
+    const matchedName = knownNames.find(known => known.toLowerCase() === nm.toLowerCase());
+    if (matchedName && !session.data.name) {
+      session.data.name = matchedName; // Use exact known spelling
+    }
+  }
+  
   if (nm && !session.data.name) session.data.name = titleCase(nm);
   if (dateHint && !session.data.ymd) session.data.ymd = normalizeDateHint(dateHint, tz);
   if (timeHint && !session.data.hhmm) session.data.hhmm = normalizeTimeHint(timeHint);
   if (svc && !session.data.service) session.data.service = svc;
+
+  // Known-name disambiguation at FSM name step
+  if (knownNames.length > 1 && !session.data.name) {
+    session.state = 'awaiting_name';
+    session.lastUpdatedISO = nowISO;
+    bookingStateMemo.set(key, session);
+    await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
+    return { reply: `I see bookings for ${knownNames.join(' and ')}. Who is this for?` };
+  }
 
   // Progression
   if (!session.data.name) {
@@ -52,33 +77,39 @@ async function advanceBookingFSM({ runtime, from, to, body, activeBookings, serv
     session.lastUpdatedISO = nowISO;
     bookingStateMemo.set(key, session);
     await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
-    return { reply: 'Got it! Can I have your first name so I can set this up?' };
+    return { reply: 'Great, I\'ll get you scheduled. What\'s your first name so I can put the booking under?' };
   }
   if (!session.data.ymd || !session.data.hhmm) {
     session.state = 'awaiting_datetime';
     session.lastUpdatedISO = nowISO;
     bookingStateMemo.set(key, session);
     await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
-    return { reply: 'Great — what date and time work best for you? Please provide full time information. Note, our working hours are 9AM to 7PM' };
+    return { reply: 'Nice — what date and time work for you?' };
   }
-  // Validate hours before asking service
-  if (!withinHours(session.data.ymd, session.data.hhmm, tz, hoursMap)) {
-    const y = session.data.ymd;
-    let windowText = 'our regular hours';
-    if (hoursMap && y) {
-      const dow = new Intl.DateTimeFormat('en-US', { weekday:'short', timeZone: tz })
-        .format(new Date(`${y}T00:00:00Z`)).toLowerCase().slice(0,3);
-      const di = { sun:0, mon:1, tue:2, wed:3, thu:4, fri:5, sat:6 }[dow];
-      const cfg = hoursMap?.[di];
-      windowText = cfg ? `${cfg.open}–${cfg.close} ${tz}` : 'closed';
-    }
+  // Check if time has already passed
+  if (isPastSlot(session.data.ymd, session.data.hhmm, tz)) {
     session.state = 'awaiting_datetime';
     session.data.ymd = '';
     session.data.hhmm = '';
     session.lastUpdatedISO = nowISO;
     bookingStateMemo.set(key, session);
     await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
-    return { reply: windowText === 'closed' ? 'We’re closed that day. Another day/time?' : `That time is outside our hours (${windowText}). Another time?` };
+    return { reply: 'Looks like that time\'s already gone by — could you pick another day or time?' };
+  }
+  // Validate hours before asking service
+  if (!withinHours(session.data.ymd, session.data.hhmm, tz, hoursMap)) {
+    const y = session.data.ymd;
+    const wd = weekdayFromYMD(y);
+    const cfg = hoursMap ? hoursMap[wd] : null;
+    const windowText = cfg ? `${cfg.open}–${cfg.close}` : 'closed';
+    session.state = 'awaiting_datetime';
+    session.data.ymd = '';
+    session.data.hhmm = '';
+    session.lastUpdatedISO = nowISO;
+    bookingStateMemo.set(key, session);
+    await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
+    const replyText = windowText === 'closed' ? 'We\'re closed that day. Could you pick another day/time?' : `That time is outside our hours (${windowText}). Another time?`;
+    return { reply: replyText };
   }
   if (!session.data.service) {
     session.state = 'awaiting_service';
@@ -99,6 +130,7 @@ async function advanceBookingFSM({ runtime, from, to, body, activeBookings, serv
   };
 
   if (isDuplicateBooking(activeBookings, proposing)) {
+    console.log(`advanceBookingFSM: duplicate detected for ${key}, resetting datetime`);
     session.state = 'awaiting_datetime';
     session.data.ymd = '';
     session.data.hhmm = '';
@@ -121,21 +153,16 @@ async function advanceBookingFSM({ runtime, from, to, body, activeBookings, serv
   }
   if (!withinHours(session.data.ymd, session.data.hhmm, tz, hoursMap)) {
     const y = session.data.ymd;
-    let windowText = '8:00–20:00';
-    if (hoursMap && y) {
-      const dow = new Intl.DateTimeFormat('en-US', { weekday:'short', timeZone: tz })
-        .format(new Date(`${y}T00:00:00Z`)).toLowerCase().slice(0,3);
-      const di = { sun:0, mon:1, tue:2, wed:3, thu:4, fri:5, sat:6 }[dow];
-      const cfg = hoursMap?.[di];
-      windowText = cfg ? `${cfg.open}–${cfg.close} ${tz}` : '8:00–20:00';
-    }
+    const wd = weekdayFromYMD(y);
+    const cfg = hoursMap ? hoursMap[wd] : null;
+    const windowText = cfg ? `${cfg.open}–${cfg.close}` : '8:00–20:00';
     session.state = 'awaiting_datetime';
     session.data.ymd = '';
     session.data.hhmm = '';
     session.lastUpdatedISO = nowISO;
     bookingStateMemo.set(key, session);
     await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
-    return { reply: `We’re closed at that time. Could you pick a slot between ${windowText}?` };
+    return { reply: `That time is outside our hours (${windowText}). Another time?` };
   }
   if (!offeredKeys.includes(String(session.data.service || ''))) {
     session.state = 'awaiting_service';
@@ -148,15 +175,17 @@ async function advanceBookingFSM({ runtime, from, to, body, activeBookings, serv
   }
 
   // Persist session state
+  console.log(`advanceBookingFSM: transitioning to awaiting_confirm for ${key}`);
   session.state = 'awaiting_confirm';
   session.lastUpdatedISO = nowISO;
   bookingStateMemo.set(key, session);
   await saveBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, session });
 
   // Log a confirm_request so the CONFIRM handler can find it
-  const confirmText = `Just to confirm — booking for ${session.data.name}: ${session.data.service} on ${whenNice}. If that’s correct, please reply CONFIRM. Or reply CHANGE if you’d like to adjust.`;
+  const confirmText = `Just to confirm — booking for ${session.data.name}: ${session.data.service} on ${whenNice}. If that's correct, please reply CONFIRM. Or reply CHANGE to adjust.`;
 
   try {
+    console.log(`advanceBookingFSM: logging confirm_request for ${key}`);
     await appendRow({
       sheetId: messagesSheetId,
       tabName: 'messages',
@@ -352,8 +381,8 @@ const dateRe  = /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/;
 const monthRe = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?\b/i;
 const relRe   = /\b(?:today|tomorrow|tmrw|this (?:mon|tue|wed|thu|fri|sat|sun|weekend)|weekend)\b/i;
 
-// Name phrases (allow multiword names and O’…/De La …)
-const namePhraseRe  = /\b(?:my name(?:'s)? is|name is|i am|i'm|im|this is|call me|it's)\s+([A-Z][A-Za-z'’\-]{1,29}(?:\s+[A-Z][A-Za-z'’\-]{1,29}){0,2})\b/;
+// Name phrases (allow multiword names and O'…/De La …, case-insensitive)
+const namePhraseRe  = /\b(?:my name(?:'s)? is|name is|i am|i'm|im|this is|call me|it's)\s+([A-Za-z][A-Za-z'’\-]{1,29}(?:\s+[A-Za-z][A-Za-z'’\-]{1,29}){0,2})\b/i;
 const NAME_STOPWORDS = new Set(['hi','hey','hello','thanks','thank','ok','okay','yeah','yep','sure','please','it','no','can']);
 
 function firstMatchWithIndex(text, regexes) {
@@ -393,8 +422,8 @@ function nameFrom(text, idx) {
 function extractForName(text) {
   const t = String(text || '');
   const patterns = [
-    /\bfor\s+(?:my\s+(?:son|daughter|wife|husband|partner)\s+)?([A-Z][A-Za-z'’\-]{1,29})\b/,
-    /\bbook\s+under\s+([A-Z][A-Za-z'’\-]{1,29})\b/,
+    /\bfor\s+(?:my\s+(?:son|daughter|wife|husband|partner)\s+)?([A-Za-z][A-Za-z'’\-]{1,29})\b/i,
+    /\bbook\s+under\s+([A-Za-z][A-Za-z'’\-]{1,29})\b/i,
   ];
   for (const re of patterns) {
     const m = re.exec(t);
@@ -417,6 +446,37 @@ function nowPartsInTZ(tz) {
     year: +parts.year, month: +parts.month, day: +parts.day,
     hour: +parts.hour, minute: +parts.minute, second: +parts.second,
   };
+}
+
+// --- Civil-time helpers (no Date timezone math) ---
+function weekdayFromYMD(ymd) {
+  // ymd: "YYYY-MM-DD" -> 0=Sun...6=Sat using Zeller's congruence (Gregorian)
+  if (!ymd) return 0;
+  const [Y, M0, D] = ymd.split('-').map(n => +n);
+  let m = M0, y = Y;
+  if (m < 3) { m += 12; y -= 1; }
+  const K = y % 100;
+  const J = Math.floor(y / 100);
+  const h = (D + Math.floor((13*(m+1))/5) + K + Math.floor(K/4) + Math.floor(J/4) + 5*J) % 7; // 0=Sat..6=Fri
+  // convert to 0=Sun..6=Sat
+  return (h + 6) % 7;
+}
+const WD_ABBR = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const MON_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function hhmm12(hhmm) {
+  const [h, m] = (hhmm || '00:00').split(':').map(n=>+n);
+  const ap = h >= 12 ? 'PM' : 'AM';
+  const h12 = ((h + 11) % 12) + 1;
+  return `${h12}:${String(m).padStart(2,'0')} ${ap}`;
+}
+function isPastSlot(ymd, hhmm, tz) {
+  if (!ymd || !hhmm) return false;
+  const now = nowPartsInTZ(tz);
+  const today = `${String(now.year).padStart(4,'0')}-${String(now.month).padStart(2,'0')}-${String(now.day).padStart(2,'0')}`;
+  const nowHM = `${String(now.hour).padStart(2,'0')}:${String(now.minute).padStart(2,'0')}`;
+  if (ymd < today) return true;
+  if (ymd > today) return false;
+  return hhmm <= nowHM;
 }
 function ymdToDate(yyyy, mm, dd)   { return new Date(Date.UTC(yyyy, mm-1, dd)); }
 function formatYMD(yyyy, mm, dd)   { return `${String(yyyy).padStart(4,'0')}-${String(mm).padStart(2,'0')}-${String(dd).padStart(2,'0')}`; }
@@ -510,24 +570,35 @@ function parseHours(hoursJson) {
 }
 function withinHours(ymd, hhmm, tz, hoursMap) {
   if (!ymd || !hhmm) return true;
-  const dt = new Date(`${ymd}T${hhmm}:00Z`);
-  const wd = new Intl.DateTimeFormat('en-US', { weekday:'short', timeZone: tz })
-               .format(dt).toLowerCase().slice(0,3);
-  const D = { sun:0, mon:1, tue:2, wed:3, thu:4, fri:5, sat:6 };
-  const cfg = hoursMap ? hoursMap[D[wd]] : null;
+  const wd = weekdayFromYMD(ymd); // 0=Sun..6=Sat
   const defaultHours = { open: '08:00', close: '20:00' };
+  const cfg = hoursMap ? (hoursMap[wd] || null) : null;
   const window = cfg || defaultHours;
   return hhmm >= window.open && hhmm <= window.close;
 }
 function niceWhen(ymd, hhmm, tz) {
   if (!ymd) return '';
   const [Y,M,D] = ymd.split('-').map(n=>+n);
-  const [h,m]   = (hhmm||'00:00').split(':').map(n=>+n);
-  const dt = new Date(Date.UTC(Y, M-1, D, h, m));
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: tz, weekday:'short', month:'short', day:'numeric',
-    hour:'numeric', minute:'2-digit'
-  }).format(dt);
+  const wd = WD_ABBR[weekdayFromYMD(ymd)];
+  const mon = MON_ABBR[(M-1)];
+  const time12 = hhmm12(hhmm || '00:00');
+  
+  // Add timezone short code for clarity
+  const tzShort = (() => {
+    if (!tz) return '';
+    const tzMap = {
+      'America/New_York': 'ET',
+      'America/Chicago': 'CT', 
+      'America/Denver': 'MT',
+      'America/Los_Angeles': 'PT',
+      'America/Phoenix': 'MST',
+      'America/Anchorage': 'AKT',
+      'Pacific/Honolulu': 'HST'
+    };
+    return tzMap[tz] || tz.split('/').pop().slice(0,2).toUpperCase();
+  })();
+  
+  return `${wd}, ${mon} ${D}, ${time12}${tzShort ? ` ${tzShort}` : ''}`;
 }
 
 // Parse a booking row start_time into { ymd, hhmm } using existing normalizers
@@ -562,10 +633,29 @@ async function fetchActiveBookings({ bookingsSheetId, spaKey, phone, tz, lookbac
     return c === normPhone || c === '1' + normPhone || '1' + c === normPhone;
   };
 
+  // Civil-time filtering (no UTC Date math)
   const now = nowPartsInTZ(tz);
-  const today = ymdToDate(now.year, now.month, now.day);
-  const startBound = new Date(today); startBound.setUTCDate(startBound.getUTCDate() - lookbackDays);
-  const endBound   = new Date(today); endBound.setUTCDate(endBound.getUTCDate() + lookaheadDays);
+  const todayYMD = `${String(now.year).padStart(4,'0')}-${String(now.month).padStart(2,'0')}-${String(now.day).padStart(2,'0')}`;
+  
+  // Pure civil date arithmetic (no JS Date timezone drift)
+  const civilAddDays = (ymd, days) => {
+    // ymd: "YYYY-MM-DD", days: integer (±)
+    let [y, m, d] = ymd.split('-').map(n => +n);
+    const monthLen = (yy, mm) => {
+      const thirty = new Set([4,6,9,11]);
+      if (mm === 2) { const leap = (yy%4===0 && yy%100!==0) || (yy%400===0); return leap ? 29 : 28; }
+      return thirty.has(mm) ? 30 : 31;
+    };
+    let n = d + days;
+    while (n < 1) { m -= 1; if (m < 1) { m = 12; y -= 1; } n += monthLen(y, m); }
+    while (n > monthLen(y, m)) { n -= monthLen(y, m); m += 1; if (m > 12) { m = 1; y += 1; } }
+    return `${String(y).padStart(4,'0')}-${String(m).padStart(2,'0')}-${String(n).padStart(2,'0')}`;
+  };
+  
+  const lowerBoundYMD = civilAddDays(todayYMD, -lookbackDays);
+  const upperBoundYMD = civilAddDays(todayYMD, lookaheadDays);
+
+  console.log(`fetchActiveBookings: spa=${spaKey}, phone=${normPhone}, tz=${tz}, range=${lowerBoundYMD} to ${upperBoundYMD}`);
 
   const out = [];
   for (let i = 1; i < rows.length; i++) {
@@ -585,11 +675,13 @@ async function fetchActiveBookings({ bookingsSheetId, spaKey, phone, tz, lookbac
     const { ymd, hhmm } = parseStartTimeToYmdHhmm(startStr, rowTz || tz);
     if (!ymd || !hhmm) continue;
 
-    const dt = new Date(`${ymd}T${hhmm}:00Z`);
-    if (dt < startBound || dt > endBound) continue;
+    // Civil-time range check (string comparison)
+    if (ymd < lowerBoundYMD || ymd > upperBoundYMD) continue;
 
     out.push({ name, service, ymd, hhmm, tz: rowTz || tz, status, rowIndex: i + 1 });
   }
+  
+  console.log(`fetchActiveBookings: found ${out.length} active bookings`);
   return out;
 }
 
@@ -604,23 +696,27 @@ function indexBookingsByName(bookings) {
   }
   return byName;
 }
+function round15(hhmm) {
+  const [h, m] = (hhmm || '00:00').split(':').map(n=>+n);
+  const rounded = Math.round(m / 15) * 15;
+  const carry = Math.floor(rounded / 60);
+  const mm = rounded % 60;
+  const hh = (h + carry) % 24;
+  return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+}
+
 function isDuplicateBooking(existing, proposed) {
   const nameKey = titleCase(proposed.name || '');
   const svcKey = normalizeServiceName(proposed.service);
-  const round5 = (hhmm) => {
-    const [h, m] = (hhmm || '00:00').split(':').map(n=>+n);
-    const rounded = Math.round(m / 5) * 5;
-    const carry = Math.floor(rounded / 60);
-    const mm = rounded % 60;
-    const hh = (h + carry) % 24;
-    return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
-  };
-  const target = round5(proposed.hhmm);
+  const target = round15(proposed.hhmm);
+  
+  console.log(`isDuplicateBooking: checking ${nameKey} ${svcKey} ${proposed.ymd} ${target} against ${existing.length} existing`);
+  
   return (existing || []).some(b => {
     if (titleCase(b.name) !== nameKey) return false;
     if (normalizeServiceName(b.service) !== svcKey) return false;
     if (b.ymd !== proposed.ymd) return false;
-    return round5(b.hhmm) === target;
+    return round15(b.hhmm) === target;
   });
 }
 
@@ -940,7 +1036,59 @@ exports.handler = async (event) => {
     return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: new twilio.twiml.MessagingResponse().toString() };
   }
 
-  /* 3) Quick commands */
+  /* 3) Operator commands */
+  if (/^debug$/i.test(body)) {
+    // Fetch active bookings for debug info
+    let debugBookings = [];
+    let totalRows = 0;
+    try {
+      debugBookings = await fetchActiveBookings({ bookingsSheetId, spaKey: spaSheetKey, phone: from, tz });
+      // Get total row count
+      const sheets = await getSheetsRO();
+      const resp = await sheets.spreadsheets.values.get({ spreadsheetId: bookingsSheetId, range: 'bookings!A:Q' });
+      totalRows = (resp.data.values || []).length;
+    } catch (e) {
+      console.error('Debug fetch failed:', e.message);
+    }
+    
+    const maskId = (id) => id ? `***${id.slice(-6)}` : 'none';
+    const lines = debugBookings.slice(0, 3).map(b => `${titleCase(b.name)} — ${b.service} — ${b.ymd} ${b.hhmm} (${b.status})`);
+    const debugText = `spa: ${spaSheetKey}
+tz: ${tz}
+messagesSheetId: ${maskId(messagesSheetId)}
+bookingsSheetId: ${maskId(bookingsSheetId)}
+tab: bookings
+scanned: ${totalRows}
+matched: ${debugBookings.length}
+${lines.length ? lines.join('\n') : 'no matches'}`;
+    
+    const twiml = new twilio.twiml.MessagingResponse(); twiml.message(debugText);
+    try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', debugText, 'N/A', ''] }); } catch {}
+    return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
+  }
+
+  if (/^reset$/i.test(body)) {
+    const fsmKey = `${spaSheetKey}|${normalize(from)}`;
+    console.log(`RESET: clearing FSM session for ${fsmKey}`);
+    try {
+      await clearBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, key: fsmKey });
+    } catch (e) { console.error('Reset failed:', e.message); }
+    const reply = 'Session cleared. To start a booking, tell me your name.';
+    const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
+    try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
+    return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
+  }
+
+  if (/^whoami$/i.test(body)) {
+    const reply = `Phone: ${normalize(from)}
+Spa: ${spaSheetKey}
+TZ: ${tz}`;
+    const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
+    try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
+    return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
+  }
+
+  /* 4) Quick commands */
   if (/^c(onfirm)?$/i.test(body)) {
     // Confirm the most recent proposal for this to/from pair
     let created = false, reply;
@@ -959,6 +1107,16 @@ exports.handler = async (event) => {
         if (bookingStateMemo.has(fsmKey)) await clearBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, key: fsmKey });
         const { name, service, date, time } = proposal;
 
+        // Duplicate check at CONFIRM time (idempotency)
+        console.log(`CONFIRM: checking duplicates for ${name} ${service} ${date} ${time}`);
+        const currentBookings = await fetchActiveBookings({ bookingsSheetId, spaKey: spaSheetKey, phone: from, tz });
+        const proposing = { name, service, ymd: date, hhmm: time };
+        if (isDuplicateBooking(currentBookings, proposing)) {
+          console.log(`CONFIRM: duplicate detected, not appending`);
+          const whenNice = niceWhen(date, time, tz);
+          reply = `You already have ${service} for ${name} on ${whenNice}. Do you want another time or to reschedule the existing one?`;
+        } else {
+          console.log(`CONFIRM: no duplicate, appending booking`);
         // write full-width row (matches your Ops->bookings header)
         await appendRow({
           sheetId: bookingsSheetId,
@@ -985,7 +1143,8 @@ exports.handler = async (event) => {
           ]
         });
         created = true;
-        reply = `Booked (pending): ${name} · ${service} on ${niceWhen(date, time, tz)}. We’ll confirm shortly. Reply HELP for help or STOP to opt out.`;
+          reply = `Booked (pending): ${name} · ${service} on ${niceWhen(date, time, tz)}. We'll confirm shortly. Reply HELP for help or STOP to opt out.`;
+        }
       } else {
         reply = `I don’t see a pending request to confirm. Tell me the service, date, time, and your name to start.`;
       }
@@ -1066,10 +1225,11 @@ exports.handler = async (event) => {
         try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
         try {
           const fsmKey = `${spaSheetKey}|${normalize(from)}`;
+          console.log(`CANCEL: clearing FSM session for ${fsmKey}`);
           await clearBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, key: fsmKey });
         } catch (e) { console.error('clearBookingSession (cancel) failed:', e.message); }
         return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
-      } catch (e) {
+    } catch (e) {
         console.error('Cancel update failed:', e.message);
         await appendAction({ sheetId: messagesSheetId, spaId: spaSheetKey, phone: from, name: toCancel.name, action: 'cancel_requested', details: `${toCancel.service} ${toCancel.ymd} ${toCancel.hhmm}` });
         const reply = `I couldn’t update that just now, but I’ve flagged it for our team.`;
@@ -1077,6 +1237,7 @@ exports.handler = async (event) => {
         try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
         try {
           const fsmKey = `${spaSheetKey}|${normalize(from)}`;
+          console.log(`CANCEL: clearing FSM session for ${fsmKey} (fallback)`);
           await clearBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, key: fsmKey });
         } catch (e2) { console.error('clearBookingSession (cancel) failed:', e2.message); }
         return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
@@ -1100,12 +1261,15 @@ exports.handler = async (event) => {
     }
     if (!targetName && knownNames.length === 1) targetName = knownNames[0];
 
+    // Civil time comparisons (no UTC Date math)
     const nowParts = nowPartsInTZ(tz);
-    const nowDate = new Date(Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day, nowParts.hour, nowParts.minute));
+    const todayYMD = `${String(nowParts.year).padStart(4,'0')}-${String(nowParts.month).padStart(2,'0')}-${String(nowParts.day).padStart(2,'0')}`;
+    const nowHM = `${String(nowParts.hour).padStart(2,'0')}:${String(nowParts.minute).padStart(2,'0')}`;
+    
     const candidates = activeBookings
       .filter(b => (targetName ? titleCase(b.name) === targetName : true))
-      .filter(b => new Date(`${b.ymd}T${b.hhmm}:00Z`) >= nowDate)
-      .sort((a, b) => new Date(`${a.ymd}T${a.hhmm}:00Z`) - new Date(`${b.ymd}T${b.hhmm}:00Z`));
+      .filter(b => (b.ymd > todayYMD) || (b.ymd === todayYMD && b.hhmm > nowHM))
+      .sort((a, b) => (a.ymd.localeCompare(b.ymd) || a.hhmm.localeCompare(b.hhmm)));
 
     const pick = candidates[0] || activeBookings[0];
     if (pick) {
@@ -1115,19 +1279,23 @@ exports.handler = async (event) => {
       const newYmd = newDateHint ? normalizeDateHint(newDateHint, tz) : '';
       const newHhmm = newTimeHint ? normalizeTimeHint(newTimeHint) : '';
       if (newYmd && newHhmm) {
-        if (!withinHours(newYmd, newHhmm, tz, hoursMap)) {
-          const dow = new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: tz })
-            .format(new Date(`${newYmd}T00:00:00Z`)).toLowerCase().slice(0,3);
-          const di = { sun:0, mon:1, tue:2, wed:3, thu:4, fri:5, sat:6 }[dow];
-          const cfg = hoursMap?.[di];
-          const windowText = cfg ? `${cfg.open}–${cfg.close} ${tz}` : 'closed';
-          const reply = windowText === 'closed'
-            ? `We’re closed that day. Could you pick another day/time?`
-            : `That time is outside our hours (${windowText}). Another time?`;
-
+        if (isPastSlot(newYmd, newHhmm, tz)) {
+          const reply = 'That time has already passed. Another time?';
           const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
           try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
-          return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
+    return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
+  }
+        if (!withinHours(newYmd, newHhmm, tz, hoursMap)) {
+          const wd = weekdayFromYMD(newYmd);
+          const cfg = hoursMap ? hoursMap[wd] : null;
+          const windowText = cfg ? `${cfg.open}–${cfg.close}` : 'closed';
+    const reply = windowText === 'closed'
+      ? `We’re closed that day. Could you pick another day/time?`
+            : `That time is outside our hours (${windowText}). Another time?`;
+
+    const twiml = new twilio.twiml.MessagingResponse(); twiml.message(reply);
+    try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
+    return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
         }
         try {
           const rows = await getSheetsROValues(bookingsSheetId, `bookings!A${pick.rowIndex}:Q${pick.rowIndex}`);
@@ -1139,6 +1307,7 @@ exports.handler = async (event) => {
           try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
           try {
             const fsmKey = `${spaSheetKey}|${normalize(from)}`;
+            console.log(`RESCHEDULE: clearing FSM session for ${fsmKey}`);
             await clearBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, key: fsmKey });
           } catch (e) { console.error('clearBookingSession (reschedule) failed:', e.message); }
           return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
@@ -1150,6 +1319,7 @@ exports.handler = async (event) => {
           try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:auto', reply, 'N/A', ''] }); } catch {}
           try {
             const fsmKey = `${spaSheetKey}|${normalize(from)}`;
+            console.log(`RESCHEDULE: clearing FSM session for ${fsmKey} (fallback)`);
             await clearBookingSession({ messagesSheetId, spaKey: spaSheetKey, to, from, key: fsmKey });
           } catch (e2) { console.error('clearBookingSession (reschedule) failed:', e2.message); }
           return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
@@ -1211,7 +1381,7 @@ exports.handler = async (event) => {
     const offered = (services || DEFAULT_SERVICES).map(s => s.key).join(', ');
     if (offered) facts.push(`Services we offer: ${offered}.`);
 
-    const sys = `You are a friendly, concise receptionist for ${spaDisplayName}. \nAnswer the user's question conversationally. \nDo not initiate booking; if the user asks to book, ask for the name first and wait for their reply.\n${facts.length ? `\nContext:\n${facts.join('\n')}\n` : ''}`;
+    const sys = `You are a friendly, concise receptionist for ${spaDisplayName}. Answer conversationally. Do not initiate booking yourself. If the user asks to book, ask for their name and let the guided steps handle it.\n${facts.length ? `\nContext:\n${facts.join('\n')}\n` : ''}`;
 
     const reply = await openaiChat(
       [{ role: 'system', content: sys }, ...effectiveHistory, { role: 'user', content: body }],
@@ -1221,10 +1391,35 @@ exports.handler = async (event) => {
     const text = reply || `Happy to help. What can I clarify?`;
     const twiml = new twilio.twiml.MessagingResponse(); twiml.message(text);
     try { await appendRow({ sheetId: messagesSheetId, tabName: 'messages', row: [nowISO, spaSheetKey, '-', to, from, 'sms', 'outbound:ai', text, 'N/A', ''] }); } catch {}
-    return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
+  return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: twiml.toString() };
   } catch (e) {
     console.error('Q&A generation failed:', e.message);
     const tw = new twilio.twiml.MessagingResponse(); tw.message('Got it. How can I help further?');
     return { statusCode: 200, headers: { 'Content-Type': 'application/xml' }, body: tw.toString() };
   }
 };
+
+/*
+Manual test script (SMS):
+
+1) DEBUG
+   - Shows spa, tz, masked sheet IDs, tab, scanned, matched=0 when you cleared Bookings.
+2) WHOAMI
+   - Shows normalized phone, spa key, tz.
+3) Book flow strictness:
+   - "I'd like to book a massage" -> ask for name
+   - "Alex" -> ask date/time
+   - "today 2pm" (after 2pm local) -> "That time has already passed..."
+   - "Fri 8pm" (outside hours) -> "outside our hours ..."
+   - "Fri 2pm" -> ask service (if not pre-parsed)
+   - "massage" -> confirm line; "CONFIRM" -> 1 row appended with "YYYY-MM-DD HH:mm" (no timezone suffix)
+4) Duplicate check:
+   - Try to book same slot again -> duplicate message
+5) Reschedule:
+   - "change to Sat 9pm" -> outside hours rejection
+   - "change to Sat 2pm" -> row updated (I column), message confirms
+6) Cancel:
+   - "cancel massage Fri 2pm" -> status becomes cancelled
+7) Operator:
+   - RESET -> session cleared; next "book" restarts at name
+*/
