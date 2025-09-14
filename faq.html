@@ -65,9 +65,18 @@
     body{font-family:'Inter',system-ui,Segoe UI,Roboto,Arial,sans-serif;color:var(--charcoal);line-height:1.6;background:#fff}
     a{color:inherit;text-decoration:none}
     .container{max-width:var(--max);margin:0 auto;padding:0 22px}
+    /* Avoid header overlap when skipping to #main */
+    #main{scroll-margin-top:80px}
 
-    /* Remove the skip link entirely */
-    .skip { display: none !important; }
+    /* Accessible skip link */
+    .skip{
+      position:absolute; left:-9999px; top:auto; width:1px; height:1px; overflow:hidden;
+      display:inline-block !important;
+    }
+    .skip:focus{
+      left:12px; top:12px; width:auto; height:auto; padding:8px 12px; background:#fff;
+      border-radius:10px; box-shadow:0 6px 20px rgba(0,0,0,.1); z-index:100;
+    }
 
     /* Header / Nav */
     header{position:sticky;top:0;z-index:50;backdrop-filter:saturate(140%) blur(10px);background:rgba(255,255,255,.82);border-bottom:1px solid var(--line);transition:box-shadow .25s ease}
@@ -77,6 +86,7 @@
     .brand-logo{width:26px;height:26px;display:block}
     .nav-cta{display:flex;gap:10px}
     .btn{padding:12px 20px;border-radius:999px;font-weight:600;transition:transform .22s ease, box-shadow .22s ease, background .22s ease;display:inline-block}
+    .btn:focus-visible{outline:3px solid rgba(46,164,79,.35); outline-offset:2px}
     .btn-primary{background:var(--aqua);color:#fff;box-shadow:var(--glow)}
     .btn-primary:hover{background:var(--aqua-dark);transform:translateY(-2px);box-shadow:var(--glow-strong)}
     .btn-secondary{border:2px solid var(--aqua);color:var(--aqua);background:#fff}
@@ -112,6 +122,50 @@
     @media (prefers-reduced-motion: reduce){
       .btn,.reveal,.faq-q,.faq-a{transition:none !important}
       .btn:hover{transform:none !important}
+    }
+    
+    /* Mobile overrides */
+    @media (max-width: 768px){
+      /* Prevent horizontal scroll on older mobiles */
+      html,body{overflow-x:hidden}
+
+      /* Slightly tighter hero padding on small screens */
+      .page-hero{padding:56px 0 10px}
+      /* Nav container stacks brand above buttons */
+      .nav{flex-direction:column;align-items:stretch;gap:10px;height:auto;padding:10px 0}
+      .brand{justify-content:center;width:100%}
+      /* 1) Navigation (header buttons) */
+      .nav-cta{display:flex;flex-direction:column;gap:12px}
+      .nav-cta .btn{width:100%;text-align:center}
+
+      /* 2) Hero sections */
+      .page-hero h1{font-size:28px}
+      .hero h1{font-size:28px}
+      .section-title{font-size:22px}
+      .hero p, .page-hero p{font-size:16px;text-align:center}
+      .hero .cta-row{flex-direction:column;align-items:center;gap:12px}
+      .hero .cta-row .btn{width:100%}
+
+      /* 3) FAQ accordion */
+      .faq-q{font-size:16px;padding:14px;column-gap:12px;min-height:48px}
+      .faq-q span{flex:0 0 auto}
+      .faq-a{font-size:15px;padding:0 14px 14px 14px}
+      .faq-item.active .faq-a{padding:0 14px 14px 14px}
+
+      /* 4) Cards, grids, and lists */
+      .cards, .stats, .roi-grid, .roi-results, .faq-list{grid-template-columns:1fr;gap:16px}
+
+      /* 5) CTA banners */
+      .cta-banner{text-align:center}
+      .cta-banner .cta-row{flex-direction:column;align-items:center;gap:12px}
+      .cta-banner .btn{width:100%}
+
+      /* 6) Forms (safety: apply if present) */
+      .fields, .roi-grid{grid-template-columns:1fr;gap:16px}
+      form input, form textarea, form select, form .btn, form button{width:100%}
+
+      /* 7) General container padding */
+      .container{padding:0 16px}
     }
   </style>
 
@@ -314,11 +368,16 @@
   document.querySelectorAll('.faq-item').forEach(item=>{
     const q = item.querySelector('.faq-q');
     const a = item.querySelector('.faq-a');
+    // Make header focusable and keyboard-activatable
+    if(q){ q.setAttribute('tabindex','0'); }
     q.addEventListener('click', ()=>{
       const isOpen = item.classList.toggle('active');
       q.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
       a.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
       a.style.maxHeight = isOpen ? (a.scrollHeight + 'px') : '0px';
+    });
+    q.addEventListener('keydown', (e)=>{
+      if(e.key==='Enter' || e.key===' '){ e.preventDefault(); q.click(); }
     });
     a.style.maxHeight = '0px';
   });
@@ -378,3 +437,4 @@
 </script>
 </body>
 </html>
+
