@@ -63,7 +63,7 @@ exports.handler = async (event) => {
       });
       gather.say(
         VOICE_OPTS,
-        "Thanks for calling. We can text you booking help and appointment updates. " +
+        "Thanks for calling Gator Spa. We can text you booking help and appointment updates. " +
           "To receive texts, press 1 or say Yes. To decline, press 2 or say No. " +
           "You may receive up to three messages per appointment. Message and data rates may apply. " +
           "You can get help by replying HELP, or opt out anytime by replying STOP. " +
