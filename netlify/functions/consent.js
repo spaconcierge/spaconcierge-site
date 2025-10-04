@@ -2,10 +2,20 @@
 const twilio = require('twilio');
 const { appendRow } = require('./_sheets');
 const { spaForNumber } = require('./_spa');
+const { verifyTwilioSignature, checkRateLimit, normalizePhoneForRateLimit } = require('./_lib/security');
 
 const YES_RE = /^(y|yes|yeah|yep|ok|okay|sure)/i;
 
 exports.handler = async (event) => {
+  // Security: Verify Twilio signature
+  if (!verifyTwilioSignature(event)) {
+    console.error('Invalid Twilio signature on consent endpoint');
+    return {
+      statusCode: 401,
+      body: 'Unauthorized'
+    };
+  }
+
   const params = new URLSearchParams(event.body || '');
   const callSid = params.get('CallSid') || '';
   const to = params.get('To') || '';
@@ -13,6 +23,22 @@ exports.handler = async (event) => {
   const digits = (params.get('Digits') || '').trim();
   const speech = (params.get('SpeechResult') || '').trim().toLowerCase();
   const accepted = digits === '1' || YES_RE.test(speech);
+
+  // Rate limiting
+  const rateLimitKey = normalizePhoneForRateLimit(from);
+  const rateLimit = checkRateLimit(rateLimitKey, 10, 60000);
+  
+  if (!rateLimit.allowed) {
+    console.warn(`Rate limit exceeded for ${rateLimitKey} on consent endpoint`);
+    const twiml = new twilio.twiml.VoiceResponse();
+    twiml.say({ voice: "Polly.Joanna", language: "en-US" }, 
+      "Too many requests. Please try again later. Goodbye.");
+    return { 
+      statusCode: 200, 
+      headers: { "Content-Type": "text/xml" }, 
+      body: twiml.toString() 
+    };
+  }
 
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const twiml = new VoiceResponse();
@@ -23,9 +49,8 @@ exports.handler = async (event) => {
   // --- 1. Log consent decision ---
   try {
     await appendRow({
-      // prefer explicit env, fallback handled inside _sheets
       sheetId: process.env.SHEET_ID || process.env.GOOGLE_SHEETS_ID,
-      tabName: 'consents', // stable tab, include spaName as a column
+      tabName: 'consents',
       row: [
         now, spaName, callSid, to, from,
         'voice', 'consent', '-', accepted ? 'YES' : 'NO', speech || digits
@@ -36,7 +61,7 @@ exports.handler = async (event) => {
   }
 
   if (accepted) {
-    // --- 2. Send the “first text” ---
+    // --- 2. Send the "first text" ---
     const client = twilio(
       process.env.TWILIO_ACCOUNT_SID,
       process.env.TWILIO_AUTH_TOKEN
