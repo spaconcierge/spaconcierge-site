@@ -1,6 +1,7 @@
 // /netlify/functions/voice.js
 const qs = require("querystring");
 const twilio = require("twilio");
+const { verifyTwilioSignature, checkRateLimit, normalizePhoneForRateLimit } = require('./_lib/security');
 
 const client = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -30,6 +31,15 @@ exports.handler = async (event) => {
   const twiml = new VoiceResponse();
 
   try {
+    // Security: Verify Twilio signature
+    if (!verifyTwilioSignature(event)) {
+      console.error('Invalid Twilio signature');
+      return {
+        statusCode: 401,
+        body: 'Unauthorized'
+      };
+    }
+
     const params =
       event.httpMethod === "POST"
         ? qs.parse(event.body || "")
@@ -40,6 +50,21 @@ exports.handler = async (event) => {
     const digits = (params.Digits || "").trim();
     const speechRaw = (params.SpeechResult || "").trim();
     const speech = speechRaw.toLowerCase();
+
+    // Rate limiting: 10 requests per minute per phone number
+    const rateLimitKey = normalizePhoneForRateLimit(from);
+    const rateLimit = checkRateLimit(rateLimitKey, 10, 60000);
+    
+    if (!rateLimit.allowed) {
+      console.warn(`Rate limit exceeded for ${rateLimitKey}`);
+      twiml.say({ voice: "Polly.Joanna", language: "en-US" }, 
+        "Too many requests. Please try again later. Goodbye.");
+      return { 
+        statusCode: 200, 
+        headers: { "Content-Type": "text/xml" }, 
+        body: twiml.toString() 
+      };
+    }
 
     const VOICE_OPTS = voiceOptsFor(to);
     const spaName = (SPA_CONFIG[to] && SPA_CONFIG[to].spaName) || "our spa";
@@ -63,7 +88,7 @@ exports.handler = async (event) => {
       });
       gather.say(
         VOICE_OPTS,
-        "Thanks for calling Gator Spa. We can text you booking help and appointment updates. " +
+        `Thanks for calling ${spaName}. We can text you booking help and appointment updates. ` +
           "To receive texts, press 1 or say Yes. To decline, press 2 or say No. " +
           "You may receive up to three messages per appointment. Message and data rates may apply. " +
           "You can get help by replying HELP, or opt out anytime by replying STOP. " +
@@ -82,7 +107,7 @@ exports.handler = async (event) => {
         const messagePayload = {
           to: from,
           body:
-            `You’re opted in to ${spaName} appointment updates (1–3 msgs per visit). ` +
+            `You're opted in to ${spaName} appointment updates (1–3 msgs per visit). ` +
             "Msg&Data rates may apply. For help reply HELP; to opt out reply STOP. What can we help you with?",
         };
         if (MSG_SERVICE_SID) {
@@ -94,7 +119,7 @@ exports.handler = async (event) => {
         console.log("Sending opt-in confirmation SMS:", messagePayload);
         await client.messages.create(messagePayload);
 
-        twiml.say(VOICE_OPTS, "Thanks. You’re opted in. We’ll text you shortly. Goodbye.");
+        twiml.say(VOICE_OPTS, "Thanks. You're opted in. We'll text you shortly. Goodbye.");
         twiml.hangup();
       } catch (smsErr) {
         console.error("SMS send failed:", smsErr.code, smsErr.message);
@@ -123,7 +148,7 @@ exports.handler = async (event) => {
     }
 
     if (saidNo) {
-      twiml.say(VOICE_OPTS, "No problem. We won’t text you. Goodbye.");
+      twiml.say(VOICE_OPTS, "No problem. We won't text you. Goodbye.");
       twiml.hangup();
       return { statusCode: 200, headers: { "Content-Type": "text/xml" }, body: twiml.toString() };
     }
@@ -138,7 +163,7 @@ exports.handler = async (event) => {
       bargeIn: true,
       hints: "yes, no, one, two, 1, 2",
     });
-    reprompt.say(VOICE_OPTS, "Sorry, I didn’t catch that. Press 1 for Yes, or 2 for No.");
+    reprompt.say(VOICE_OPTS, "Sorry, I didn't catch that. Press 1 for Yes, or 2 for No.");
     twiml.say(VOICE_OPTS, "Goodbye.");
 
     return { statusCode: 200, headers: { "Content-Type": "text/xml" }, body: twiml.toString() };
