@@ -1,5 +1,6 @@
 import { google } from "googleapis";
 import twilio from "twilio";
+import { verifyCalendlySignature } from "./_lib/security.js";
 
 // Append a row to Google Sheets
 async function appendRow(values){
@@ -29,7 +30,18 @@ export const handler = async (event) => {
   if (event.httpMethod !== "POST")
     return { statusCode: 405, body: "Method Not Allowed" };
 
-  // Calendly posts JSON (Webhooks v2). We’ll be lenient on shape.
+  // Security: Verify Calendly signature (if configured)
+  if (process.env.CALENDLY_WEBHOOK_SIGNING_KEY) {
+    if (!verifyCalendlySignature(event)) {
+      console.error('Invalid Calendly webhook signature');
+      return {
+        statusCode: 401,
+        body: JSON.stringify({ error: 'Unauthorized' })
+      };
+    }
+  }
+
+  // Calendly posts JSON (Webhooks v2). We'll be lenient on shape.
   const body = JSON.parse(event.body || "{}");
   const payload = body.payload || body;
 
@@ -52,7 +64,11 @@ export const handler = async (event) => {
     start, tz, "missed_call_sms", "", ""
   ];
 
-  try { await appendRow(row); } catch (e) { console.error("Sheets append failed:", e?.message || e); }
+  try { 
+    await appendRow(row); 
+  } catch (e) { 
+    console.error("Sheets append failed:", e?.message || e); 
+  }
 
   // Staff alert
   await notifySlack(`✅ New booking: *${name}* — ${service} at ${start}`);
